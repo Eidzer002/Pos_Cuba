@@ -47,6 +47,9 @@ dependencies:
   share_plus: ^8.0.3
   csv: ^6.0.0
 
+  # File Picker (importar CSV)
+  file_picker: ^8.1.2
+
   # Barcode scanning
   mobile_scanner: ^5.1.1
 
