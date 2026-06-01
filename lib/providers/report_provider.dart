@@ -71,7 +71,7 @@ class TopProducts extends _$TopProducts {
   }
 }
 
-/// Ventas por categoria.
+/// Ventas por categoria — alias usado en ReportsScreen.
 @riverpod
 class SalesByCategory extends _$SalesByCategory {
   @override
