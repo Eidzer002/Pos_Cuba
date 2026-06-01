@@ -209,6 +209,12 @@ GoRouter router(RouterRef ref) {
       GoRoute(
         path: AppRoutes.settings,
         builder: (context, state) => const SettingsScreen(),
+        routes: [
+          GoRoute(
+            path: AppRoutes.backup,
+            builder: (context, state) => const BackupScreen(),
+          ),
+        ],
       ),
 
       // Sub-rutas de inventario
