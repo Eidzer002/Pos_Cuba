@@ -11,6 +11,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/app_strings.dart';
 import '../../../core/utils/currency_formatter.dart';
+import '../../../core/utils/date_formatter.dart';
+import '../../../services/powersync_service.dart';
 import '../../../data/models/category.dart';
 import '../../../data/models/product.dart';
 import '../../../data/repositories/product_repository.dart';
@@ -248,6 +250,28 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Historial de stock
+  // ---------------------------------------------------------------------------
+
+  void _openStockHistory() {
+    final business = ref.read(currentBusinessProvider).valueOrNull;
+    if (business == null || widget.productId == null) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => _StockHistorySheet(
+        productId: widget.productId!,
+        businessId: business.id,
+        productName: _nameCtrl.text,
+      ),
+    );
+  }
+
   void _showSuccess(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Row(children: [
@@ -294,12 +318,18 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
       appBar: AppBar(
         title: Text(widget.isEditing ? 'Editar Producto' : 'Nuevo Producto'),
         actions: [
-          if (widget.isEditing)
+          if (widget.isEditing) ...[
+            IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Historial de stock',
+              onPressed: _isSaving ? null : _openStockHistory,
+            ),
             IconButton(
               icon: const Icon(Icons.delete_outline),
               tooltip: 'Desactivar producto',
               onPressed: _isSaving ? null : _deactivate,
             ),
+          ],
         ],
       ),
       body: _isSaving
@@ -592,6 +622,232 @@ class _CategoryDropdown extends StatelessWidget {
         ),
       ],
       onChanged: onChanged,
+    );
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// _StockHistorySheet — Historial de movimientos de stock
+// ---------------------------------------------------------------------------
+
+class _StockHistorySheet extends StatefulWidget {
+  final String productId;
+  final String businessId;
+  final String productName;
+
+  const _StockHistorySheet({
+    required this.productId,
+    required this.businessId,
+    required this.productName,
+  });
+
+  @override
+  State<_StockHistorySheet> createState() => _StockHistorySheetState();
+}
+
+class _StockHistorySheetState extends State<_StockHistorySheet> {
+  late Future<List<Map<String, dynamic>>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _historyFuture = StockMovementRepository(PowerSyncService.db)
+        .getProductHistory(
+      productId: widget.productId,
+      businessId: widget.businessId,
+    );
+  }
+
+  // Ícono y color según tipo de movimiento
+  (IconData, Color) _iconForType(String type) {
+    switch (type) {
+      case 'sale':
+        return (Icons.point_of_sale_outlined, Colors.red.shade600);
+      case 'sale_cancelled':
+        return (Icons.undo, Colors.orange.shade600);
+      case 'adjustment_in':
+        return (Icons.add_circle_outline, Colors.green.shade600);
+      case 'adjustment_out':
+        return (Icons.remove_circle_outline, Colors.red.shade400);
+      default:
+        return (Icons.swap_horiz, Colors.grey);
+    }
+  }
+
+  String _labelForType(String type) {
+    switch (type) {
+      case 'sale':
+        return 'Venta';
+      case 'sale_cancelled':
+        return 'Venta anulada';
+      case 'adjustment_in':
+        return 'Entrada manual';
+      case 'adjustment_out':
+        return 'Salida manual';
+      default:
+        return type;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (context, scrollController) {
+        return Column(
+          children: [
+            // Mango
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                    color: cs.outlineVariant,
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            // Header
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.history, color: cs.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Historial de stock',
+                            style: theme.textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        Text(widget.productName,
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: cs.outline),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+
+            // Lista de movimientos
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: _historyFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                        child: Text('Error: \${snapshot.error}',
+                            textAlign: TextAlign.center));
+                  }
+
+                  final movements = snapshot.data ?? [];
+
+                  if (movements.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.history_toggle_off,
+                              size: 56, color: cs.outlineVariant),
+                          const SizedBox(height: 12),
+                          Text('Sin movimientos registrados.',
+                              style: theme.textTheme.bodyLarge
+                                  ?.copyWith(color: cs.onSurfaceVariant)),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return ListView.separated(
+                    controller: scrollController,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: movements.length,
+                    separatorBuilder: (_, __) =>
+                        const Divider(height: 1, indent: 72, endIndent: 16),
+                    itemBuilder: (_, i) {
+                      final m = movements[i];
+                      final type = m['movement_type'] as String? ?? '';
+                      final change = (m['quantity_change'] as num?)?.toInt() ?? 0;
+                      final stockAfter = (m['stock_after'] as num?)?.toInt() ?? 0;
+                      final notes = m['notes'] as String? ?? '';
+                      final createdAt = m['created_at'] as String?;
+                      final date = createdAt != null
+                          ? DateFormatter.fromIso8601(createdAt)
+                          : null;
+
+                      final (icon, color) = _iconForType(type);
+                      final changeStr =
+                          change >= 0 ? '+\$change' : '\$change';
+
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: color.withOpacity(0.12),
+                          child: Icon(icon, color: color, size: 20),
+                        ),
+                        title: Row(
+                          children: [
+                            Text(_labelForType(type),
+                                style: theme.textTheme.bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600)),
+                            const Spacer(),
+                            Text(changeStr,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: change >= 0
+                                        ? Colors.green.shade700
+                                        : Colors.red.shade600)),
+                          ],
+                        ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (notes.isNotEmpty)
+                              Text(notes,
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: cs.onSurfaceVariant)),
+                            Row(
+                              children: [
+                                Text(
+                                  date != null
+                                      ? DateFormatter.formatDateTime(date)
+                                      : '—',
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: cs.outline),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  'Stock: \$stockAfter',
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: cs.outline),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        isThreeLine: notes.isNotEmpty,
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
