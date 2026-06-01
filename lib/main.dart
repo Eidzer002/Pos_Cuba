@@ -13,6 +13,9 @@ import 'services/license_service.dart';
 import 'services/powersync_service.dart';
 import 'presentation/screens/screens.dart';
 import 'presentation/widgets/common/app_scaffold.dart';
+import 'presentation/screens/auth/worker_pin_screen.dart';
+import 'presentation/screens/auth/register_screen.dart';
+import 'presentation/screens/inventory/product_form_screen.dart';
 
 import 'providers/auth_provider.dart';
 import 'providers/worker_session_provider.dart';
@@ -53,8 +56,34 @@ class POSCubaApp extends ConsumerWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FIX BUG-A: RouterListenable — notifica al router cuando cambia auth o
+// workerSession para que re-evalúe los redirects automáticamente.
+// Sin esto, cerrar sesión no redirige al login.
+// ---------------------------------------------------------------------------
+
+class _RouterListenable extends ChangeNotifier {
+  _RouterListenable(Ref ref) {
+    // Escuchar cambios de auth de Supabase
+    ref.listen<AsyncValue<AuthStateData>>(authStateProvider, (_, __) {
+      notifyListeners();
+    });
+    // Escuchar cambios de sesión de trabajador
+    ref.listen<WorkerSessionData?>(workerSessionProvider, (_, __) {
+      notifyListeners();
+    });
+  }
+}
+
+@Riverpod(keepAlive: true)
+Raw<_RouterListenable> routerListenable(RouterListenableRef ref) {
+  final listenable = _RouterListenable(ref);
+  ref.onDispose(listenable.dispose);
+  return listenable;
+}
+
 /// Provider del router con guards de navegacion.
-/// 
+///
 /// Guards en orden de evaluacion:
 /// 1. Sin sesion Supabase → /login
 /// 2. Licencia hardBlocked → /license-blocked
@@ -62,8 +91,12 @@ class POSCubaApp extends ConsumerWidget {
 /// 4. Ruta owner + rol worker → /dashboard
 @riverpod
 GoRouter router(RouterRef ref) {
+  // FIX BUG-A: refreshListenable re-ejecuta redirect cuando auth o workerSession cambian
+  final listenable = ref.watch(routerListenableProvider);
+
   return GoRouter(
     initialLocation: AppRoutes.splash,
+    refreshListenable: listenable,
     redirect: (context, state) async {
       final currentPath = state.uri.path;
 
@@ -75,12 +108,9 @@ GoRouter router(RouterRef ref) {
       ];
 
       // Si es ruta publica, permitir acceso sin verificacion
-      if (publicRoutes.contains(currentPath)) {
-        return null;
-      }
+      if (publicRoutes.contains(currentPath)) return null;
 
-      // GUARD 1: Verificar sesion Supabase (Usando AuthState provider)
-      // Nota: Leemos el estado actual del stream. Si es nulo o no autenticado, redirect.
+      // GUARD 1: Verificar sesion Supabase
       final authState = ref.read(authStateProvider).asData?.value;
       if (authState == null || !authState.isAuthenticated) {
         return AppRoutes.login;
@@ -92,34 +122,26 @@ GoRouter router(RouterRef ref) {
         return AppRoutes.licenseBlocked;
       }
 
-      // GUARD 3: Verificar WorkerSession activa (BUG-02)
-      // No aplica en Splash, Login, Register, LicenseBlocked ni WorkerPin
+      // GUARD 3: Verificar WorkerSession activa (FIX BUG-02)
       final skipWorkerGuard = [
         ...publicRoutes,
         AppRoutes.workerPin,
         AppRoutes.licenseBlocked,
       ];
 
-      final workerSession = ref.read(currentWorkerSessionProvider);
+      final workerSession = ref.read(workerSessionProvider);
       if (!skipWorkerGuard.contains(currentPath) && workerSession == null) {
         return AppRoutes.workerPin;
       }
 
       // GUARD 4: Verificar permisos de owner
-      // Las rutas owner-only son: inventory, reports, settings
-      final ownerOnlyRoutes = [
-        AppRoutes.inventory,
-        AppRoutes.reports,
-        AppRoutes.settings,
-      ];
-
+      // FIX BUG-B: Redirigir a dashboard cuando worker intenta acceder a ruta owner
+      final ownerOnlyRoutes = AppRoutes.ownerOnlyRoutes;
       final isOwner = workerSession?.isOwner ?? false;
       if (ownerOnlyRoutes.contains(currentPath) && !isOwner) {
-        // Trabajadores sin permiso de owner son redirigidos a caja o ventas (dashboard es seguro)
-        return null; // Dashborad es permitido
+        return AppRoutes.dashboard;
       }
 
-      // Todas las verificaciones pasaron, permitir navegacion
       return null;
     },
     routes: [
@@ -192,13 +214,13 @@ GoRouter router(RouterRef ref) {
       // Sub-rutas de inventario
       GoRoute(
         path: AppRoutes.inventoryNew,
-        builder: (context, state) => ProductFormScreen(productId: state.pathParameters['productId']),
+        builder: (context, state) => const ProductFormScreen(),
       ),
       GoRoute(
         path: '/inventory/:productId',
         builder: (context, state) {
           final productId = state.pathParameters['productId']!;
-          return ProductFormScreen(productId: state.pathParameters['productId']);
+          return ProductFormScreen(productId: productId);
         },
       ),
     ],
