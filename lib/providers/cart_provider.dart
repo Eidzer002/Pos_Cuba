@@ -25,7 +25,8 @@ class Cart extends _$Cart {
   /// Agrega un producto al carrito.
   /// Si ya existe, incrementa la cantidad en [quantity] (por defecto 1).
   void addItem(Product product, {int quantity = 1}) {
-    assert(quantity > 0, 'La cantidad debe ser mayor a cero');
+    // WARN-6 FIX: assert() se desactiva en release. Validación real en su lugar.
+    if (quantity <= 0) return;
 
     final index = _indexOf(product.id);
     if (index != -1) {
