@@ -10,7 +10,7 @@ import '../../../core/constants/app_routes.dart';
 import '../../../data/models/business.dart';
 import '../../../data/repositories/business_repository.dart';
 import '../../../providers/auth_provider.dart';
-import '../../../providers/business_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../services/powersync_service.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
@@ -57,15 +57,12 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       );
 
       // 2. Esperar sesión activa
-      final user = ref.read(authUserProvider);
+      final user = Supabase.instance.client.auth.currentUser;
       if (user == null) throw Exception('Error al crear la cuenta');
 
       // 3. Crear el negocio en la BD
       final repo = BusinessRepository(PowerSyncService.db);
-      await repo.createBusiness(
-        ownerId: user.id,
-        name: _businessNameCtrl.text.trim(),
-      );
+      await repo.createBusiness(user.id, _businessNameCtrl.text.trim());
 
       if (mounted) context.go(AppRoutes.workerPin);
     } catch (e) {
