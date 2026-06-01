@@ -136,13 +136,13 @@ GoRouter router(RouterRef ref) {
       ),
       GoRoute(
         path: AppRoutes.register,
-        builder: (context, state) => const Placeholder(), // TODO: RegisterScreen
+        builder: (context, state) => const RegisterScreen(),
       ),
 
       // Worker PIN
       GoRoute(
         path: AppRoutes.workerPin,
-        builder: (context, state) => const Placeholder(), // TODO: WorkerPinScreen
+        builder: (context, state) => const WorkerPinScreen(),
       ),
 
       // License
@@ -192,13 +192,13 @@ GoRouter router(RouterRef ref) {
       // Sub-rutas de inventario
       GoRoute(
         path: AppRoutes.inventoryNew,
-        builder: (context, state) => const Placeholder(), // TODO: ProductFormScreen
+        builder: (context, state) => ProductFormScreen(productId: state.pathParameters['productId']),
       ),
       GoRoute(
         path: '/inventory/:productId',
         builder: (context, state) {
           final productId = state.pathParameters['productId']!;
-          return Placeholder(); // TODO: ProductDetailScreen
+          return ProductFormScreen(productId: state.pathParameters['productId']);
         },
       ),
     ],
