@@ -11,6 +11,7 @@ import '../../../core/constants/app_strings.dart';
 import '../../../core/utils/security_utils.dart';
 import '../../../data/models/worker.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/theme_provider.dart';
 import '../../../providers/business_provider.dart';
 import '../../../providers/worker_provider.dart';
 
@@ -83,6 +84,55 @@ class SettingsScreen extends ConsumerWidget {
 
           // ── Configuración ────────────────────────────────────────────────
           const _SectionHeader(title: 'Configuración'),
+          // Toggle de tema claro/oscuro/sistema
+          Consumer(
+            builder: (context, ref, _) {
+              final themeAsync = ref.watch(appThemeModeProvider);
+              final mode = themeAsync.valueOrNull ?? ThemeMode.system;
+              return ListTile(
+                leading: Icon(
+                  mode == ThemeMode.dark
+                      ? Icons.dark_mode_outlined
+                      : mode == ThemeMode.light
+                          ? Icons.light_mode_outlined
+                          : Icons.brightness_auto_outlined,
+                ),
+                title: const Text('Apariencia'),
+                subtitle: Text(
+                  mode == ThemeMode.dark
+                      ? 'Modo oscuro'
+                      : mode == ThemeMode.light
+                          ? 'Modo claro'
+                          : 'Según el sistema',
+                ),
+                trailing: SegmentedButton<ThemeMode>(
+                  style: SegmentedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      icon: Icon(Icons.light_mode, size: 18),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      icon: Icon(Icons.brightness_auto, size: 18),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      icon: Icon(Icons.dark_mode, size: 18),
+                    ),
+                  ],
+                  selected: {mode},
+                  onSelectionChanged: (selection) {
+                    ref.read(appThemeModeProvider.notifier)
+                        .setTheme(selection.first);
+                  },
+                ),
+              );
+            },
+          ),
+
           ListTile(
             leading: const Icon(Icons.attach_money_outlined),
             title: const Text(AppStrings.currencySettings),
