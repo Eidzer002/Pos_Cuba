@@ -18,6 +18,7 @@ import 'presentation/screens/auth/register_screen.dart';
 import 'presentation/screens/inventory/product_form_screen.dart';
 
 import 'providers/auth_provider.dart';
+import 'providers/theme_provider.dart';
 import 'providers/worker_session_provider.dart';
 
 part 'main.g.dart';
@@ -45,12 +46,15 @@ class POSCubaApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    // Escuchar el tema guardado — ThemeMode.system mientras carga
+    final themeMode = ref.watch(appThemeModeProvider).valueOrNull ?? ThemeMode.system;
 
     return MaterialApp.router(
       title: 'POS Cuba',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
+      themeMode: themeMode,
       routerConfig: router,
     );
   }
