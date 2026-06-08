@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/app_strings.dart';
+import '../../widgets/common/barcode_scanner_sheet.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../services/powersync_service.dart';
@@ -108,6 +109,13 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
   // ---------------------------------------------------------------------------
   // Guardar
   // ---------------------------------------------------------------------------
+
+  Future<void> _scanBarcode() async {
+    final code = await showBarcodeScannerSheet(context);
+    if (code != null && mounted) {
+      setState(() => _barcodeCtrl.text = code);
+    }
+  }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -543,10 +551,15 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
                   // Código de barras
                   TextFormField(
                     controller: _barcodeCtrl,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Código de barras (opcional)',
-                      prefixIcon: Icon(Icons.qr_code_outlined),
-                      border: OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.qr_code_outlined),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.qr_code_scanner),
+                        tooltip: 'Escanear código',
+                        onPressed: _scanBarcode,
+                      ),
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
