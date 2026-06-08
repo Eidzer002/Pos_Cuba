@@ -535,7 +535,9 @@ class _CartBottomSheet extends ConsumerWidget {
     final currency     = ref.watch(currencySymbolProvider);
     final cart         = ref.watch(cartProvider);
     final cartNotifier = ref.read(cartProvider.notifier);
-    final total        = cartNotifier.total;
+    final discount     = ref.watch(saleDiscountProvider);
+    final subtotal     = cartNotifier.total;
+    final finalTotal   = (subtotal - discount).clamp(0.0, double.infinity);
     final theme = Theme.of(context);
     final cs    = theme.colorScheme;
 
@@ -625,12 +627,75 @@ class _CartBottomSheet extends ConsumerWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Subtotal (solo visible si hay descuento)
+                      if (discount > 0) ...[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('Subtotal:', style: theme.textTheme.bodyMedium
+                                ?.copyWith(color: cs.onSurfaceVariant)),
+                            Text(
+                              CurrencyFormatter.format(subtotal, currency),
+                              style: theme.textTheme.bodyMedium
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                      // Fila descuento
+                      Row(
+                        children: [
+                          Icon(Icons.discount_outlined, size: 16, color: cs.primary),
+                          const SizedBox(width: 6),
+                          Text('Descuento:', style: theme.textTheme.bodyMedium),
+                          const Spacer(),
+                          if (discount > 0) ...[
+                            Text(
+                              '- \${CurrencyFormatter.format(discount, currency)}',
+                              style: TextStyle(
+                                  color: Colors.green.shade700,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(width: 4),
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero),
+                              onPressed: () =>
+                                  _showDiscountDialog(context, ref, subtotal),
+                              child: const Text('Editar'),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(Icons.close, size: 16, color: cs.error),
+                              tooltip: 'Quitar descuento',
+                              onPressed: () =>
+                                  ref.read(saleDiscountProvider.notifier).set(0),
+                            ),
+                          ] else
+                            TextButton.icon(
+                              style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero),
+                              icon: const Icon(Icons.add, size: 16),
+                              label: const Text('Agregar'),
+                              onPressed: () =>
+                                  _showDiscountDialog(context, ref, subtotal),
+                            ),
+                        ],
+                      ),
+                      if (discount > 0)
+                        const Divider(height: 16)
+                      else
+                        const SizedBox(height: 8),
+                      // Total final
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text('Total a pagar:', style: theme.textTheme.titleMedium),
                           Text(
-                            CurrencyFormatter.format(total, currency),
+                            CurrencyFormatter.format(finalTotal, currency),
                             style: theme.textTheme.headlineSmall?.copyWith(
                                 fontWeight: FontWeight.bold, color: cs.primary),
                           ),
@@ -657,6 +722,62 @@ class _CartBottomSheet extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  /// Dialog para ingresar o editar el descuento del carrito.
+  void _showDiscountDialog(
+      BuildContext context, WidgetRef ref, double subtotal) {
+    final current    = ref.read(saleDiscountProvider);
+    final controller = TextEditingController(
+      text: current > 0 ? current.toStringAsFixed(2) : '',
+    );
+    final formKey = GlobalKey<FormState>();
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Aplicar descuento'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Monto del descuento',
+              prefixIcon: Icon(Icons.discount_outlined),
+              border: OutlineInputBorder(),
+              hintText: '0.00',
+            ),
+            validator: (v) {
+              final val =
+                  double.tryParse((v ?? '').replaceAll(',', '.')) ?? -1;
+              if (val < 0) return 'Ingresa un monto válido';
+              if (val >= subtotal) return 'El descuento no puede igualar o superar el subtotal';
+              return null;
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (!formKey.currentState!.validate()) return;
+              final val = double.tryParse(
+                      controller.text.replaceAll(',', '.')) ??
+                  0;
+              ref.read(saleDiscountProvider.notifier).set(val);
+              Navigator.pop(ctx);
+            },
+            child: const Text('Aplicar'),
+          ),
+        ],
+      ),
     );
   }
 
