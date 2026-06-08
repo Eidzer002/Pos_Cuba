@@ -3,6 +3,7 @@
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../data/models/sale.dart' as sale_models;
+import '../data/models/sale_result.dart';
 import 'cart_provider.dart';
 
 import '../data/models/worker.dart';
@@ -62,10 +63,11 @@ class SaleDiscount extends _$SaleDiscount {
 }
 
 /// Procesamiento de venta (async).
+/// Devuelve [SaleResult] con el id de la venta y alertas de stock bajo.
 @riverpod
 class SaleProcessor extends _$SaleProcessor {
   @override
-  FutureOr<String?> build() => null;
+  FutureOr<SaleResult?> build() => null;
 
   Future<void> process({
     required String? workerId,
@@ -76,15 +78,15 @@ class SaleProcessor extends _$SaleProcessor {
     state = const AsyncValue.loading();
     try {
       final repository = ref.read(saleRepositoryProvider);
-      final cart = ref.read(cartProvider);
+      final cart        = ref.read(cartProvider);
       final paymentMethod = ref.read(paymentMethodProvider);
-      final discount = ref.read(saleDiscountProvider);
+      final discount    = ref.read(saleDiscountProvider);
 
       if (cart.isEmpty) {
         throw Exception('El carrito esta vacio');
       }
 
-      final saleId = await repository.processSale(
+      final result = await repository.processSale(
         workerId: workerId,
         cashSessionId: cashSessionId,
         items: cart,
@@ -98,7 +100,7 @@ class SaleProcessor extends _$SaleProcessor {
       ref.read(cartProvider.notifier).clear();
       ref.read(saleDiscountProvider.notifier).set(0);
 
-      state = AsyncValue.data(saleId);
+      state = AsyncValue.data(result);
     } catch (e, stack) {
       state = AsyncValue.error(e, stack);
     }
