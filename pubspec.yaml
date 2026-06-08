@@ -54,6 +54,15 @@ dependencies:
   # Barcode scanning
   mobile_scanner: ^5.1.1
 
+  # Thermal printing (Bluetooth ESC/POS)
+  # AndroidManifest.xml — añadir manualmente en PC:
+  #   <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+  #   <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+  #   <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
+  #   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+  print_bluetooth_thermal: ^1.3.4
+  esc_pos_utils_plus: ^2.0.1
+
   # Image handling
   image_picker: ^1.1.2
   cached_network_image: ^3.3.1
