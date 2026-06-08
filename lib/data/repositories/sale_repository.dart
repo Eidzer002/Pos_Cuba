@@ -6,6 +6,7 @@ import 'package:powersync/powersync.dart';
 import 'package:uuid/uuid.dart';
 import '../models/sale.dart';
 import '../models/sale_item.dart';
+import '../models/sale_result.dart';
 import '../models/worker.dart';
 import '../models/cart_item.dart';
 
@@ -98,15 +99,16 @@ class SaleRepository {
   // ============================================
 
   /// Procesa una venta atomicamente.
-  /// 
-  /// PORT exacto de processSale() de index.js lineas 855-937.
-  /// 
+  ///
+  /// Devuelve [SaleResult] con el id de la venta y la lista de productos
+  /// cuyo stock cayó a su mínimo configurado o menos (alertas de reposición).
+  ///
   /// Pasos:
   /// 1. Verificar y descontar stock (dentro de TX)
   /// 2. Insertar la venta
   /// 3. Insertar sale_items
-  /// 4. Log de stock_movements
-  Future<String> processSale({
+  /// 4. Log de stock_movements + detectar stock bajo
+  Future<SaleResult> processSale({
     required String? workerId,
     required String? cashSessionId,
     required List<CartItem> items,
@@ -123,6 +125,9 @@ class SaleRepository {
     final total = subtotal - discountAmount;
     final profit = items.fold<double>(0, (s, i) => s + i.lineProfit) - discountAmount;
     final commission = _calcCommission(worker, total);
+
+    // Productos que caen a stock bajo tras esta venta
+    final lowStockProducts = <LowStockProduct>[];
 
     try {
       await db.writeTransaction((tx) async {
@@ -178,14 +183,22 @@ class SaleRepository {
           ]);
         }
 
-        // PASO 4: Log de stock_movements (trazabilidad)
+        // PASO 4: Log de stock_movements + detectar stock bajo
         for (final item in items) {
-          final stockRows = await tx.execute(
-            'SELECT stock FROM products WHERE id = ? AND business_id = ?',
-            [item.productId, businessId],
-          );
-          final newStock = stockRows.first['stock'] as int;
+          // Obtener stock post-venta junto a min_stock, track_stock y name
+          // para registrar movimiento Y detectar alertas en una sola query.
+          final stockRows = await tx.execute('''
+            SELECT stock, min_stock, track_stock, name
+            FROM products
+            WHERE id = ? AND business_id = ?
+          ''', [item.productId, businessId]);
 
+          final newStock    = stockRows.first['stock']       as int;
+          final minStock    = stockRows.first['min_stock']   as int;
+          final trackStock  = (stockRows.first['track_stock'] as int) == 1;
+          final productName = stockRows.first['name']        as String;
+
+          // Registrar movimiento de stock
           await tx.execute('''
             INSERT INTO stock_movements (
               id, business_id, product_id, movement_type, quantity_change,
@@ -195,10 +208,20 @@ class SaleRepository {
             const Uuid().v4(), businessId, item.productId,
             -item.quantity, newStock, saleId, workerId ?? 'system', now,
           ]);
+
+          // Detectar stock bajo: track_stock activo Y stock cayó a mínimo o menos
+          if (trackStock && newStock <= minStock) {
+            lowStockProducts.add(LowStockProduct(
+              id: item.productId,
+              name: productName,
+              stock: newStock,
+              minStock: minStock,
+            ));
+          }
         }
       });
 
-      return saleId;
+      return SaleResult(saleId: saleId, lowStockProducts: lowStockProducts);
     } catch (e, stack) {
       debugPrint('SaleRepository.processSale: $e\n$stack');
       rethrow;
@@ -206,8 +229,6 @@ class SaleRepository {
   }
 
   /// Cancela una venta y restaura el stock.
-  /// 
-  /// PORT exacto de deleteSale() de index.js lineas 939-978.
   Future<void> cancelSale(String saleId, String reason) async {
     final now = DateTime.now().toIso8601String();
 
@@ -221,7 +242,7 @@ class SaleRepository {
 
         // Restaurar stock de cada producto
         for (final item in items) {
-          final qty = item['quantity'] as int;
+          final qty       = item['quantity']   as int;
           final productId = item['product_id'] as String;
 
           await tx.execute('''
