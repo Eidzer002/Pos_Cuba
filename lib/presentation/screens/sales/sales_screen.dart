@@ -318,6 +318,324 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// _ReceiptSheet — Recibo de venta con impresión térmica
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ReceiptSheet extends ConsumerStatefulWidget {
+  final String saleId;
+  final String businessId;
+
+  const _ReceiptSheet({required this.saleId, required this.businessId});
+
+  @override
+  ConsumerState<_ReceiptSheet> createState() => _ReceiptSheetState();
+}
+
+class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
+  Sale? _sale;
+  List<SaleItem> _items = [];
+  bool _isLoading  = true;
+  bool _isPrinting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final db = PowerSyncService.db;
+    final saleRows = await db.execute(
+      'SELECT * FROM sales WHERE id = ? AND business_id = ?',
+      [widget.saleId, widget.businessId],
+    );
+    if (!mounted || saleRows.isEmpty) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+    final itemRows = await db.execute(
+      'SELECT * FROM sale_items WHERE sale_id = ? ORDER BY created_at ASC',
+      [widget.saleId],
+    );
+    if (!mounted) return;
+    setState(() {
+      _sale      = Sale.fromRow(saleRows.first);
+      _items     = itemRows.map(SaleItem.fromRow).toList();
+      _isLoading = false;
+    });
+  }
+
+  // ── Impresión ─────────────────────────────────────────────────────────────
+
+  Future<void> _handlePrint() async {
+    final service = PrinterService.instance;
+    String? mac = await service.getSavedMac();
+
+    if (mac == null) {
+      mac = await _showDevicePicker();
+      if (mac == null) return;
+      await service.saveMac(mac);
+    }
+
+    setState(() => _isPrinting = true);
+    try {
+      final currency     = ref.read(currencySymbolProvider);
+      final businessName =
+          ref.read(currentBusinessProvider).valueOrNull?.name ?? 'POS Cuba';
+      await service.printReceipt(
+        mac: mac,
+        businessName: businessName,
+        sale: _sale!,
+        items: _items,
+        currency: currency,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Row(children: [
+            Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+            SizedBox(width: 8),
+            Expanded(child: Text('Impresión enviada correctamente')),
+          ]),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } on PrinterException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.message),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isPrinting = false);
+    }
+  }
+
+  /// Muestra las impresoras emparejadas y devuelve la MAC seleccionada.
+  Future<String?> _showDevicePicker() async {
+    final devices = await PrinterService.instance.getPairedDevices();
+    if (!mounted) return null;
+
+    if (devices.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+          'No hay impresoras emparejadas. '
+          'Ve a Ajustes > Bluetooth y empareja tu impresora primero.',
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 6),
+      ));
+      return null;
+    }
+
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Seleccionar impresora'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: devices.length,
+            itemBuilder: (_, i) {
+              final dev = devices[i];
+              return ListTile(
+                leading: const Icon(Icons.print_outlined),
+                title: Text(dev.name),
+                subtitle: Text(dev.macAdress),
+                onTap: () => Navigator.pop(ctx, dev.macAdress),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final currency      = ref.watch(currencySymbolProvider);
+    final businessAsync = ref.watch(currentBusinessProvider);
+    final theme = Theme.of(context);
+    final cs    = theme.colorScheme;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      minChildSize: 0.5,
+      maxChildSize: 0.97,
+      expand: false,
+      builder: (context, scrollController) {
+        return Column(
+          children: [
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 4),
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                    color: cs.outlineVariant,
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              color: Colors.green.shade50,
+              child: Column(children: [
+                Icon(Icons.check_circle_rounded,
+                    size: 48, color: Colors.green.shade700),
+                const SizedBox(height: 6),
+                Text('¡Venta completada!',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800)),
+              ]),
+            ),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _sale == null
+                      ? const Center(child: Text('No se pudo cargar el recibo.'))
+                      : ListView(
+                          controller: scrollController,
+                          padding: const EdgeInsets.all(20),
+                          children: [
+                            Center(
+                              child: Text(
+                                businessAsync.valueOrNull?.name ?? 'POS Cuba',
+                                style: theme.textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Center(
+                              child: Text(
+                                DateFormatter.formatDateTime(_sale!.createdAt),
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: cs.outline),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Center(
+                              child: Text(
+                                'Recibo #${_sale!.id.substring(0, 8).toUpperCase()}',
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: cs.outline),
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Divider(height: 1),
+                            ),
+                            ..._items.map((item) => Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  child: Row(children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${item.productName} x${item.quantity}',
+                                        style: theme.textTheme.bodyMedium,
+                                      ),
+                                    ),
+                                    Text(
+                                      CurrencyFormatter.format(item.lineTotal, currency),
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(fontWeight: FontWeight.w500),
+                                    ),
+                                  ]),
+                                )),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Divider(height: 1),
+                            ),
+                            if (_sale!.discountAmount > 0) ...[
+                              _ReceiptRow(
+                                  label: 'Subtotal',
+                                  value: CurrencyFormatter.format(
+                                      _sale!.subtotal, currency)),
+                              _ReceiptRow(
+                                  label: 'Descuento',
+                                  value: '- ${CurrencyFormatter.format(_sale!.discountAmount, currency)}',
+                                  valueColor: Colors.green.shade700),
+                            ],
+                            _ReceiptRow(
+                              label: 'TOTAL',
+                              value: CurrencyFormatter.format(_sale!.total, currency),
+                              bold: true,
+                              large: true,
+                            ),
+                            const SizedBox(height: 8),
+                            Center(
+                              child: Chip(
+                                avatar: Icon(
+                                  _sale!.paymentMethod == PaymentMethod.cash
+                                      ? Icons.payments_outlined
+                                      : Icons.credit_card,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  _sale!.paymentMethod == PaymentMethod.cash
+                                      ? 'Efectivo'
+                                      : 'Transferencia',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 32),
+                          ],
+                        ),
+            ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: (_isLoading || _sale == null || _isPrinting)
+                            ? null
+                            : _handlePrint,
+                        icon: _isPrinting
+                            ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.print_outlined),
+                        label: Text(_isPrinting ? 'Imprimiendo...' : 'Imprimir'),
+                        style: OutlinedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(48)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.check),
+                        label: const Text('Listo'),
+                        style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(48)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // _ReceiptSheet — Recibo de venta
 // ─────────────────────────────────────────────────────────────────────────────
 
