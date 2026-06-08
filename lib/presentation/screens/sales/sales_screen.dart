@@ -652,7 +652,7 @@ class _CartBottomSheet extends ConsumerWidget {
                           const Spacer(),
                           if (discount > 0) ...[
                             Text(
-                              '- \${CurrencyFormatter.format(discount, currency)}',
+                              '- ${CurrencyFormatter.format(discount, currency)}',
                               style: TextStyle(
                                   color: Colors.green.shade700,
                                   fontWeight: FontWeight.w500),
