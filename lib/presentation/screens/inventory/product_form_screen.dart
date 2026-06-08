@@ -3,10 +3,15 @@
 // Ruta /inventory/new  -> productId == null (crear)
 // Ruta /inventory/:id  -> productId != null  (editar)
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as pathlib;
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/app_strings.dart';
@@ -65,6 +70,7 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
 
   // Estado del formulario
   String? _selectedCategoryId;
+  String? _imagePath;          // Ruta local de la foto del producto
   bool _trackStock = true;
   bool _isActive = true;
   bool _isSaving = false;
@@ -94,6 +100,7 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
     _minStockCtrl.text = p.minStock.toString();
     _barcodeCtrl.text = p.barcode ?? '';
     _selectedCategoryId = p.categoryId;
+    _imagePath = p.imagePath;
     _trackStock = p.trackStock;
     _isActive = p.isActive;
   }
@@ -133,6 +140,7 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
           stock: stock,
           minStock: minStock,
           barcode: _barcodeCtrl.text.trim().isEmpty ? null : _barcodeCtrl.text.trim(),
+          imagePath: _imagePath,
           trackStock: _trackStock,
           isActive: _isActive,
         );
@@ -170,6 +178,7 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
           stock: stock,
           minStock: minStock,
           barcode: _barcodeCtrl.text.trim().isEmpty ? null : _barcodeCtrl.text.trim(),
+          imagePath: _imagePath,
           trackStock: _trackStock,
           isActive: true,
           createdAt: now,
@@ -251,6 +260,89 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
   }
 
   // ---------------------------------------------------------------------------
+  // Foto del producto
+  // ---------------------------------------------------------------------------
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final XFile? picked = await picker.pickImage(
+        source: source,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      // Copiar a almacenamiento permanente de la app
+      final docsDir   = await getApplicationDocumentsDirectory();
+      final imagesDir = Directory('${docsDir.path}/product_images');
+      if (!await imagesDir.exists()) await imagesDir.create(recursive: true);
+
+      final ext      = pathlib.extension(picked.path).toLowerCase();
+      final filename = '${const Uuid().v4()}$ext';
+      final destPath = '${imagesDir.path}/$filename';
+      await File(picked.path).copy(destPath);
+
+      if (mounted) setState(() => _imagePath = destPath);
+    } catch (e) {
+      if (mounted) _showError('Error al seleccionar imagen: $e');
+    }
+  }
+
+  void _showImageSourceSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 6),
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.outlineVariant,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Cámara'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickImage(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Galería'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickImage(ImageSource.gallery);
+              },
+            ),
+            if (_imagePath != null)
+              ListTile(
+                leading: Icon(Icons.delete_outline, color: Colors.red.shade600),
+                title: Text(
+                  'Quitar foto',
+                  style: TextStyle(color: Colors.red.shade600),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  setState(() => _imagePath = null);
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Historial de stock
   // ---------------------------------------------------------------------------
 
@@ -269,6 +361,27 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
         businessId: business.id,
         productName: _nameCtrl.text,
       ),
+    );
+  }
+
+  Widget _imagePlaceholder(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.add_photo_alternate_outlined,
+          size: 48,
+          color: cs.onSurfaceVariant.withOpacity(0.45),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Toca para agregar foto',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+        ),
+      ],
     );
   }
 
@@ -339,6 +452,48 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  // ── Foto del producto ───────────────────────────────────
+                  _SectionHeader(title: 'Foto del producto'),
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: _showImageSourceSheet,
+                    child: Container(
+                      height: 180,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: _imagePath != null && _imagePath!.isNotEmpty
+                          ? Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Image.file(
+                                  File(_imagePath!),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      _imagePlaceholder(context),
+                                ),
+                                Positioned(
+                                  bottom: 10,
+                                  right: 10,
+                                  child: FloatingActionButton.small(
+                                    heroTag: 'photo_edit',
+                                    onPressed: _showImageSourceSheet,
+                                    tooltip: 'Cambiar foto',
+                                    child: const Icon(Icons.edit, size: 18),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : _imagePlaceholder(context),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
                   // ── Información básica ──────────────────────────────────
                   _SectionHeader(title: 'Información básica'),
                   const SizedBox(height: 12),
