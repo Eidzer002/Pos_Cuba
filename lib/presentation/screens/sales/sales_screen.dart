@@ -20,6 +20,7 @@ import '../../../providers/category_provider.dart';
 import '../../../providers/product_provider.dart';
 import '../../../providers/sale_provider.dart';
 import '../../../services/powersync_service.dart';
+import '../../widgets/common/barcode_scanner_sheet.dart';
 import '../../widgets/common/product_card.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,6 +72,43 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
       return;
     }
     cartNotifier.addItem(product);
+  }
+
+  Future<void> _scanAndAddToCart() async {
+    final barcode = await showBarcodeScannerSheet(context);
+    if (barcode == null || !mounted) return;
+
+    final products = ref.read(productsProvider).valueOrNull ?? [];
+    final matches  = products.where((p) => p.barcode == barcode).toList();
+
+    if (matches.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Código no encontrado: $barcode'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    final product = matches.first;
+    if (product.isOutOfStock) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${product.name} no tiene stock disponible.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+      return;
+    }
+
+    _addToCart(product);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(children: [
+        const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+        const SizedBox(width: 8),
+        Expanded(child: Text('${product.name} agregado al carrito')),
+      ]),
+      backgroundColor: Colors.green.shade700,
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   void _openCart() {
@@ -225,6 +263,11 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
               hintText: 'Buscar producto por nombre…',
               leading: const Icon(Icons.search),
               trailing: [
+                IconButton(
+                  icon: const Icon(Icons.qr_code_scanner),
+                  tooltip: 'Escanear código',
+                  onPressed: _scanAndAddToCart,
+                ),
                 if (_searchQuery.isNotEmpty)
                   IconButton(
                     icon: const Icon(Icons.close),
