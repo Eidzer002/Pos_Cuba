@@ -1,6 +1,6 @@
 // lib/presentation/screens/sales/sales_screen.dart
 // Pantalla de ventas — grilla de productos, búsqueda, carrito y recibo.
-// Material Design 3. Textos en español. BUG-04 aplicado: moneda desde provider.
+// Material Design 3. Textos en español.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +12,7 @@ import '../../../data/models/category.dart';
 import '../../../data/models/product.dart';
 import '../../../data/models/sale.dart';
 import '../../../data/models/sale_item.dart';
+import '../../../data/models/sale_result.dart';
 import '../../../data/repositories/sale_repository.dart';
 import '../../../providers/business_provider.dart';
 import '../../../providers/cart_provider.dart';
@@ -83,10 +84,11 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
     );
   }
 
-  // Callback cuando la venta se procesa exitosamente — muestra el recibo
-  void _onSaleCompleted(String saleId) {
+  /// Muestra el recibo. Al cerrarlo, muestra alertas de stock bajo si aplica.
+  void _onSaleCompleted(SaleResult result) {
     final businessId = ref.read(selectedBusinessIdProvider);
     if (businessId == null) return;
+
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -95,16 +97,106 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
       enableDrag: false,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => _ReceiptSheet(saleId: saleId, businessId: businessId),
+      builder: (_) => _ReceiptSheet(saleId: result.saleId, businessId: businessId),
+    ).then((_) {
+      // Mostrar alerta de stock bajo después de que el usuario cierra el recibo
+      if (!mounted || !result.hasLowStockAlerts) return;
+      _showLowStockAlert(result.lowStockProducts);
+    });
+  }
+
+  /// Dialog de alertas de stock bajo post-venta.
+  void _showLowStockAlert(List<LowStockProduct> products) {
+    if (products.isEmpty) return;
+    final cs = Theme.of(context).colorScheme;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(
+          Icons.inventory_2_outlined,
+          color: Colors.orange,
+          size: 36,
+        ),
+        title: Text(
+          products.length == 1 ? 'Stock bajo' : 'Alertas de stock',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              products.length == 1
+                  ? 'Este producto necesita reposición:'
+                  : 'Los siguientes productos necesitan reposición:',
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 14),
+            ...products.map((p) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      Icon(
+                        p.isOutOfStock
+                            ? Icons.remove_shopping_cart
+                            : Icons.warning_amber_rounded,
+                        size: 18,
+                        color: p.isOutOfStock ? Colors.red : Colors.orange,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          p.name,
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: p.isOutOfStock
+                              ? Colors.red.shade50
+                              : Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: p.isOutOfStock
+                                ? Colors.red.shade200
+                                : Colors.orange.shade200,
+                          ),
+                        ),
+                        child: Text(
+                          p.isOutOfStock
+                              ? 'Sin stock'
+                              : '${p.stock} / ${p.minStock}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: p.isOutOfStock
+                                ? Colors.red.shade700
+                                : Colors.orange.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Escuchar venta exitosa para mostrar recibo
-    ref.listen<AsyncValue<String?>>(saleProcessorProvider, (_, next) {
-      next.whenData((saleId) {
-        if (saleId != null) _onSaleCompleted(saleId);
+    // Escuchar resultado de venta
+    ref.listen<AsyncValue<SaleResult?>>(saleProcessorProvider, (_, next) {
+      next.whenData((result) {
+        if (result != null) _onSaleCompleted(result);
       });
       if (next.hasError) {
         final err = next.error;
@@ -117,7 +209,7 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
       }
     });
 
-    final productsAsync = ref.watch(productsProvider);
+    final productsAsync   = ref.watch(productsProvider);
     final categoriesAsync = ref.watch(currentBusinessCategoriesProvider);
     final itemCount = ref.watch(
         cartProvider.select((c) => c.fold(0, (s, i) => s + i.quantity)));
@@ -193,7 +285,6 @@ class _ReceiptSheet extends ConsumerWidget {
 
   Future<Map<String, dynamic>?> _loadSaleData(String businessId) async {
     final db = PowerSyncService.db;
-    // Cargar venta
     final saleRows = await db.execute(
       'SELECT * FROM sales WHERE id = ? AND business_id = ?',
       [saleId, businessId],
@@ -201,7 +292,6 @@ class _ReceiptSheet extends ConsumerWidget {
     if (saleRows.isEmpty) return null;
     final sale = Sale.fromRow(saleRows.first);
 
-    // Cargar items
     final itemRows = await db.execute(
       'SELECT * FROM sale_items WHERE sale_id = ? ORDER BY created_at ASC',
       [saleId],
@@ -213,10 +303,10 @@ class _ReceiptSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final currency = ref.watch(currencySymbolProvider);
+    final currency     = ref.watch(currencySymbolProvider);
     final businessAsync = ref.watch(currentBusinessProvider);
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs    = theme.colorScheme;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.75,
@@ -226,7 +316,6 @@ class _ReceiptSheet extends ConsumerWidget {
       builder: (context, scrollController) {
         return Column(
           children: [
-            // Mango
             Center(
               child: Container(
                 margin: const EdgeInsets.only(top: 12, bottom: 4),
@@ -237,7 +326,6 @@ class _ReceiptSheet extends ConsumerWidget {
               ),
             ),
 
-            // Header verde "Venta exitosa"
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 16),
@@ -255,7 +343,6 @@ class _ReceiptSheet extends ConsumerWidget {
               ),
             ),
 
-            // Contenido del recibo
             Expanded(
               child: FutureBuilder<Map<String, dynamic>?>(
                 future: _loadSaleData(businessId),
@@ -267,7 +354,7 @@ class _ReceiptSheet extends ConsumerWidget {
                     return const Center(child: Text('No se pudo cargar el recibo.'));
                   }
 
-                  final sale = snapshot.data!['sale'] as Sale;
+                  final sale  = snapshot.data!['sale'] as Sale;
                   final items = snapshot.data!['items'] as List<SaleItem>;
                   final businessName =
                       businessAsync.valueOrNull?.name ?? 'POS Cuba';
@@ -276,7 +363,6 @@ class _ReceiptSheet extends ConsumerWidget {
                     controller: scrollController,
                     padding: const EdgeInsets.all(20),
                     children: [
-                      // Nombre del negocio
                       Center(
                         child: Text(businessName,
                             style: theme.textTheme.titleMedium?.copyWith(
@@ -301,7 +387,6 @@ class _ReceiptSheet extends ConsumerWidget {
                         child: Divider(height: 1),
                       ),
 
-                      // Items
                       ...items.map((item) => Padding(
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
@@ -326,7 +411,6 @@ class _ReceiptSheet extends ConsumerWidget {
                         child: Divider(height: 1),
                       ),
 
-                      // Subtotal
                       if (sale.discountAmount > 0) ...[
                         _ReceiptRow(
                             label: 'Subtotal',
@@ -337,7 +421,6 @@ class _ReceiptSheet extends ConsumerWidget {
                             valueColor: Colors.green.shade700),
                       ],
 
-                      // Total
                       _ReceiptRow(
                         label: 'TOTAL',
                         value: CurrencyFormatter.format(sale.total, currency),
@@ -347,7 +430,6 @@ class _ReceiptSheet extends ConsumerWidget {
 
                       const SizedBox(height: 8),
 
-                      // Método de pago
                       Center(
                         child: Chip(
                           avatar: Icon(
@@ -371,7 +453,6 @@ class _ReceiptSheet extends ConsumerWidget {
               ),
             ),
 
-            // Botón cerrar
             SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
@@ -446,17 +527,17 @@ class _ReceiptRow extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _CartBottomSheet extends ConsumerWidget {
-  final ValueChanged<String> onSaleCompleted;
+  final ValueChanged<SaleResult> onSaleCompleted;
   const _CartBottomSheet({required this.onSaleCompleted});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final currency = ref.watch(currencySymbolProvider);
-    final cart = ref.watch(cartProvider);
+    final currency     = ref.watch(currencySymbolProvider);
+    final cart         = ref.watch(cartProvider);
     final cartNotifier = ref.read(cartProvider.notifier);
-    final total = cartNotifier.total;
+    final total        = cartNotifier.total;
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs    = theme.colorScheme;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.6,
@@ -750,7 +831,7 @@ class _CartItemTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs    = theme.colorScheme;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       title: Text(item.productName,
