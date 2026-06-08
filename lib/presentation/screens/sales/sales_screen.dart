@@ -21,6 +21,7 @@ import '../../../providers/product_provider.dart';
 import '../../../providers/sale_provider.dart';
 import '../../../services/powersync_service.dart';
 import '../../widgets/common/barcode_scanner_sheet.dart';
+import '../../../services/printer_service.dart';
 import '../../widgets/common/product_card.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
