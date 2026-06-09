@@ -93,6 +93,27 @@ class WorkerOperations extends _$WorkerOperations {
     }
   }
 
+  /// Actualiza el tipo y valor de comisión de un trabajador.
+  Future<void> updateCommission({
+    required String workerId,
+    required String businessId,
+    required CommissionType commissionType,
+    required double commissionValue,
+  }) async {
+    state = const AsyncValue.loading();
+    try {
+      await ref.read(workerRepositoryProvider).updateCommission(
+        workerId: workerId,
+        businessId: businessId,
+        commissionType: commissionType,
+        commissionValue: commissionValue,
+      );
+      state = const AsyncValue.data(null);
+    } catch (e, stack) {
+      state = AsyncValue.error(e, stack);
+    }
+  }
+
   /// Cambia el PIN de un trabajador.
   Future<void> changePin({
     required String workerId,
