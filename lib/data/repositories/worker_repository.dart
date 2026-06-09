@@ -72,6 +72,32 @@ class WorkerRepository {
     }
   }
 
+  Future<void> updateCommission({
+    required String workerId,
+    required String businessId,
+    required CommissionType commissionType,
+    required double commissionValue,
+  }) async {
+    try {
+      final now = DateTime.now().toIso8601String();
+      await db.execute(
+        '''UPDATE workers
+           SET commission_type = ?, commission_value = ?, updated_at = ?
+           WHERE id = ? AND business_id = ?''',
+        [
+          commissionType == CommissionType.fixed ? 'fixed' : 'percentage',
+          commissionValue,
+          now,
+          workerId,
+          businessId,
+        ],
+      );
+    } catch (e, stack) {
+      debugPrint('WorkerRepository.updateCommission: \$e\n\$stack');
+      rethrow;
+    }
+  }
+
   Future<void> changePin({
     required String workerId,
     required String businessId,
