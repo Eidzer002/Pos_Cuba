@@ -93,7 +93,7 @@ class WorkerRepository {
         ],
       );
     } catch (e, stack) {
-      debugPrint('WorkerRepository.updateCommission: \$e\n\$stack');
+      debugPrint('WorkerRepository.updateCommission: $e\n$stack');
       rethrow;
     }
   }
