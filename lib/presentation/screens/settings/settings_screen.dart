@@ -1,10 +1,16 @@
 // lib/presentation/screens/settings/settings_screen.dart
 // Pantalla de configuración general.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as pathlib;
+import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/app_routes.dart';
 import '../../../core/constants/app_strings.dart';
@@ -32,12 +38,18 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           // ── Negocio ──────────────────────────────────────────────────────
           const _SectionHeader(title: 'Negocio'),
-          ListTile(
-            leading: const Icon(Icons.business_outlined),
-            title: const Text('Información del negocio'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // TODO: Pantalla editar negocio
+          Consumer(
+            builder: (context, ref, _) {
+              final business = ref.watch(currentBusinessProvider).valueOrNull;
+              return ListTile(
+                leading: const Icon(Icons.business_outlined),
+                title: const Text('Información del negocio'),
+                subtitle: business != null ? Text(business.name) : null,
+                trailing: const Icon(Icons.chevron_right),
+                onTap: business == null
+                    ? null
+                    : () => _showBusinessInfoSheet(context, ref, business),
+              );
             },
           ),
           ListTile(
@@ -133,12 +145,16 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
 
-          ListTile(
-            leading: const Icon(Icons.attach_money_outlined),
-            title: const Text(AppStrings.currencySettings),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // TODO: Configurar moneda
+          Consumer(
+            builder: (context, ref, _) {
+              final symbol = ref.watch(currencySymbolProvider);
+              return ListTile(
+                leading: const Icon(Icons.attach_money_outlined),
+                title: const Text(AppStrings.currencySettings),
+                subtitle: Text('Símbolo actual: $symbol'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _showCurrencyDialog(context, ref),
+              );
             },
           ),
           ListTile(
@@ -219,10 +235,20 @@ class _WorkerPinTile extends ConsumerWidget {
             .bodySmall
             ?.copyWith(color: Theme.of(context).colorScheme.outline),
       ),
-      trailing: TextButton.icon(
-        icon: const Icon(Icons.pin_outlined, size: 16),
-        label: const Text('Cambiar PIN'),
-        onPressed: () => _showChangePinDialog(context, ref),
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert),
+        onSelected: (value) {
+          if (value == 'pin') _showChangePinDialog(context, ref);
+          if (value == 'commission') _showCommissionDialog(context, ref);
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(value: 'pin',
+              child: ListTile(dense: true, leading: Icon(Icons.pin_outlined),
+                  title: Text('Cambiar PIN'), contentPadding: EdgeInsets.zero)),
+          PopupMenuItem(value: 'commission',
+              child: ListTile(dense: true, leading: Icon(Icons.percent),
+                  title: Text('Editar comisión'), contentPadding: EdgeInsets.zero)),
+        ],
       ),
     );
   }
@@ -231,6 +257,13 @@ class _WorkerPinTile extends ConsumerWidget {
     showDialog<void>(
       context: context,
       builder: (_) => _ChangePinDialog(worker: worker),
+    );
+  }
+
+  void _showCommissionDialog(BuildContext context, WidgetRef ref) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _CommissionDialog(worker: worker),
     );
   }
 }
@@ -405,6 +438,316 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// _showCurrencyDialog — #18
+// ─────────────────────────────────────────────────────────────────────────────
+
+Future<void> _showCurrencyDialog(BuildContext context, WidgetRef ref) async {
+  final business = ref.read(currentBusinessProvider).valueOrNull;
+  if (business == null) return;
+
+  const presets = ['CUP', 'USD', 'EUR', 'MLC'];
+  String selected = business.currencySymbol;
+  final customCtrl = TextEditingController(
+      text: presets.contains(selected) ? '' : selected);
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => AlertDialog(
+        title: const Text('Símbolo de moneda'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              children: presets.map((p) => ChoiceChip(
+                label: Text(p),
+                selected: selected == p,
+                onSelected: (_) => setState(() {
+                  selected = p;
+                  customCtrl.clear();
+                }),
+              )).toList(),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: customCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Personalizado (ej. \$ , €, Bs)',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.edit_outlined),
+              ),
+              maxLength: 5,
+              onChanged: (v) => setState(() => selected = v.trim().isEmpty ? presets[0] : v.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final symbol = customCtrl.text.trim().isNotEmpty
+                  ? customCtrl.text.trim()
+                  : selected;
+              final repo = ref.read(businessRepositoryProvider);
+              await repo.updateBusiness(business.copyWith(currencySymbol: symbol));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Moneda actualizada a: $symbol'),
+                  behavior: SnackBarBehavior.floating,
+                ));
+              }
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+// _showBusinessInfoSheet — #17
+// ─────────────────────────────────────────────────────────────────────────────
+
+void _showBusinessInfoSheet(BuildContext context, WidgetRef ref, business) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    builder: (_) => _BusinessInfoSheet(business: business),
+  );
+}
+
+class _BusinessInfoSheet extends ConsumerStatefulWidget {
+  final dynamic business;
+  const _BusinessInfoSheet({required this.business});
+
+  @override
+  ConsumerState<_BusinessInfoSheet> createState() => _BusinessInfoSheetState();
+}
+
+class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _addressCtrl;
+  late final TextEditingController _phoneCtrl;
+  String? _logoPath;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl    = TextEditingController(text: widget.business.name as String);
+    _addressCtrl = TextEditingController(text: widget.business.address as String? ?? '');
+    _phoneCtrl   = TextEditingController(text: widget.business.phone as String? ?? '');
+    _logoPath    = widget.business.logoPath as String?;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose(); _addressCtrl.dispose(); _phoneCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickLogo() async {
+    final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery, maxWidth: 512, maxHeight: 512, imageQuality: 90);
+    if (picked == null) return;
+    final docsDir = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docsDir.path}/business');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    final dest = '${dir.path}/${const Uuid().v4()}${pathlib.extension(picked.path)}';
+    await File(picked.path).copy(dest);
+    if (mounted) setState(() => _logoPath = dest);
+  }
+
+  Future<void> _save() async {
+    if (_nameCtrl.text.trim().isEmpty) return;
+    setState(() => _isSaving = true);
+    try {
+      final repo = ref.read(businessRepositoryProvider);
+      await repo.updateBusiness(widget.business.copyWith(
+        name: _nameCtrl.text.trim(),
+        address: _addressCtrl.text.trim().isEmpty ? null : _addressCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+        logoPath: _logoPath,
+      ));
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20,
+          MediaQuery.of(context).viewInsets.bottom + 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 40, height: 4,
+              decoration: BoxDecoration(color: cs.outlineVariant,
+                  borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 16),
+          Text('Información del negocio',
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+
+          // Logo
+          GestureDetector(
+            onTap: _pickLogo,
+            child: Stack(alignment: Alignment.bottomRight, children: [
+              CircleAvatar(
+                radius: 48,
+                backgroundColor: cs.primaryContainer,
+                backgroundImage: _logoPath != null && File(_logoPath!).existsSync()
+                    ? FileImage(File(_logoPath!)) : null,
+                child: _logoPath == null
+                    ? Icon(Icons.storefront_outlined, size: 40, color: cs.onPrimaryContainer)
+                    : null,
+              ),
+              CircleAvatar(radius: 14, backgroundColor: cs.primary,
+                  child: Icon(Icons.camera_alt, size: 14, color: cs.onPrimary)),
+            ]),
+          ),
+          const SizedBox(height: 20),
+
+          TextFormField(controller: _nameCtrl,
+              decoration: const InputDecoration(labelText: 'Nombre del negocio *',
+                  prefixIcon: Icon(Icons.store_outlined), border: OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextFormField(controller: _addressCtrl,
+              decoration: const InputDecoration(labelText: 'Dirección (opcional)',
+                  prefixIcon: Icon(Icons.location_on_outlined), border: OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextFormField(controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Teléfono (opcional)',
+                  prefixIcon: Icon(Icons.phone_outlined), border: OutlineInputBorder())),
+          const SizedBox(height: 20),
+
+          SizedBox(width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _isSaving ? null : _save,
+              icon: _isSaving
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.save_outlined),
+              label: Text(_isSaving ? 'Guardando...' : 'Guardar'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// _CommissionDialog — #16
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CommissionDialog extends ConsumerStatefulWidget {
+  final dynamic worker;
+  const _CommissionDialog({required this.worker});
+
+  @override
+  ConsumerState<_CommissionDialog> createState() => _CommissionDialogState();
+}
+
+class _CommissionDialogState extends ConsumerState<_CommissionDialog> {
+  late CommissionType _type;
+  late final TextEditingController _valueCtrl;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.worker.commissionType as CommissionType;
+    _valueCtrl = TextEditingController(
+        text: (widget.worker.commissionValue as double).toStringAsFixed(2));
+  }
+
+  @override
+  void dispose() { _valueCtrl.dispose(); super.dispose(); }
+
+  Future<void> _save() async {
+    final value = double.tryParse(_valueCtrl.text.replaceAll(',', '.')) ?? 0;
+    if (value < 0) return;
+    final business = ref.read(currentBusinessProvider).valueOrNull;
+    if (business == null) return;
+    setState(() => _isSaving = true);
+    try {
+      await ref.read(workerOperationsProvider.notifier).updateCommission(
+        workerId: widget.worker.id as String,
+        businessId: business.id,
+        commissionType: _type,
+        commissionValue: value,
+      );
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Comisión de ${widget.worker.name} actualizada.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.green.shade700,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Comisión — ${widget.worker.name}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SegmentedButton<CommissionType>(
+            segments: const [
+              ButtonSegment(value: CommissionType.percentage,
+                  icon: Icon(Icons.percent), label: Text('Porcentaje')),
+              ButtonSegment(value: CommissionType.fixed,
+                  icon: Icon(Icons.attach_money), label: Text('Fijo')),
+            ],
+            selected: {_type},
+            onSelectionChanged: (s) => setState(() => _type = s.first),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _valueCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: _type == CommissionType.percentage
+                  ? 'Porcentaje (ej. 5.0 = 5%)' : 'Monto fijo por venta',
+              border: const OutlineInputBorder(),
+              prefixIcon: Icon(_type == CommissionType.percentage
+                  ? Icons.percent : Icons.attach_money),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        FilledButton(
+          onPressed: _isSaving ? null : _save,
+          child: _isSaving
+              ? const SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Text('Guardar'),
+        ),
+      ],
+    );
+  }
+}
+
 // _SectionHeader
 // ─────────────────────────────────────────────────────────────────────────────
 
