@@ -4,7 +4,7 @@
 //
 // FIXES aplicados:
 //   BUG-1: _showPaymentDialog lee workerSessionProvider + openSessionProvider
-//   BUG-4: ref.invalidateSelf() después de cerrar el recibo
+//   BUG-4: ref.invalidate(saleProcessorProvider) después de cerrar el recibo
 //   ARCH-1: _ReceiptSheetState usa SaleRepository en lugar de db directamente
 
 import 'package:flutter/material.dart';
@@ -128,9 +128,8 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
     );
   }
 
-  /// Muestra el recibo. Al cerrarlo:
-  ///   - BUG-4: resetea SaleProcessor para evitar re-disparos
-  ///   - Muestra alertas de stock bajo si aplica
+  /// FIX BUG-4: resetea SaleProcessor después de cerrar el recibo para
+  /// evitar que ref.listen re-dispare _onSaleCompleted en futuros rebuilds.
   void _onSaleCompleted(SaleResult result) {
     final businessId = ref.read(selectedBusinessIdProvider);
     if (businessId == null) return;
@@ -145,8 +144,7 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _ReceiptSheet(saleId: result.saleId, businessId: businessId),
     ).then((_) {
-      // FIX BUG-4: resetear el procesador para que el ref.listen no
-      // re-dispare este callback con el resultado anterior en futuros builds.
+      // FIX BUG-4: resetear estado del procesador antes de las alertas
       ref.invalidate(saleProcessorProvider);
 
       if (!mounted || !result.hasLowStockAlerts) return;
@@ -183,8 +181,7 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(p.name,
-                          style: const TextStyle(fontWeight: FontWeight.w500)),
+                      child: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w500)),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
@@ -209,10 +206,7 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
           ],
         ),
         actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Entendido'),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Entendido')),
         ],
       ),
     );
@@ -331,7 +325,8 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
     _loadData();
   }
 
-  /// FIX ARCH-1: usa el repositorio en lugar de PowerSyncService.db directamente.
+  /// FIX ARCH-1: usa SaleRepository.getSale() y getSaleItems() en lugar de
+  /// acceder a PowerSyncService.db directamente (violación de capas).
   Future<void> _loadData() async {
     try {
       final repository = ref.read(saleRepositoryProvider);
@@ -363,14 +358,10 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
     setState(() => _isPrinting = true);
     try {
       final currency     = ref.read(currencySymbolProvider);
-      final businessName =
-          ref.read(currentBusinessProvider).valueOrNull?.name ?? 'POS Cuba';
+      final businessName = ref.read(currentBusinessProvider).valueOrNull?.name ?? 'POS Cuba';
       await service.printReceipt(
-        mac: mac,
-        businessName: businessName,
-        sale: _sale!,
-        items: _items,
-        currency: currency,
+        mac: mac, businessName: businessName,
+        sale: _sale!, items: _items, currency: currency,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -429,12 +420,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
             },
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
-        ],
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar'))],
       ),
     );
   }
@@ -447,9 +433,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
     final cs    = theme.colorScheme;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.75,
-      minChildSize: 0.5,
-      maxChildSize: 0.97,
+      initialChildSize: 0.75, minChildSize: 0.5, maxChildSize: 0.97,
       expand: false,
       builder: (context, scrollController) {
         return Column(
@@ -459,8 +443,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                 margin: const EdgeInsets.only(top: 12, bottom: 4),
                 width: 40, height: 4,
                 decoration: BoxDecoration(
-                    color: cs.outlineVariant,
-                    borderRadius: BorderRadius.circular(2)),
+                    color: cs.outlineVariant, borderRadius: BorderRadius.circular(2)),
               ),
             ),
             Container(
@@ -472,8 +455,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                 const SizedBox(height: 6),
                 Text('¡Venta completada!',
                     style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green.shade800)),
+                        fontWeight: FontWeight.bold, color: Colors.green.shade800)),
               ]),
             ),
             Expanded(
@@ -485,8 +467,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                             padding: const EdgeInsets.all(24),
                             child: Text('Error al cargar recibo: $_loadError',
                                 textAlign: TextAlign.center),
-                          ),
-                        )
+                          ))
                       : _sale == null
                           ? const Center(child: Text('No se pudo cargar el recibo.'))
                           : ListView(
@@ -503,16 +484,14 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                                 Center(
                                   child: Text(
                                     DateFormatter.formatDateTime(_sale!.createdAt),
-                                    style: theme.textTheme.bodySmall
-                                        ?.copyWith(color: cs.outline),
+                                    style: theme.textTheme.bodySmall?.copyWith(color: cs.outline),
                                   ),
                                 ),
                                 const SizedBox(height: 4),
                                 Center(
                                   child: Text(
                                     'Recibo #${_sale!.id.substring(0, 8).toUpperCase()}',
-                                    style: theme.textTheme.bodySmall
-                                        ?.copyWith(color: cs.outline),
+                                    style: theme.textTheme.bodySmall?.copyWith(color: cs.outline),
                                   ),
                                 ),
                                 const Padding(
@@ -523,10 +502,8 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                                       padding: const EdgeInsets.symmetric(vertical: 4),
                                       child: Row(children: [
                                         Expanded(
-                                          child: Text(
-                                            '${item.productName} x${item.quantity}',
-                                            style: theme.textTheme.bodyMedium,
-                                          ),
+                                          child: Text('${item.productName} x${item.quantity}',
+                                              style: theme.textTheme.bodyMedium),
                                         ),
                                         Text(
                                           CurrencyFormatter.format(item.lineTotal, currency),
@@ -551,22 +528,19 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                                 _ReceiptRow(
                                   label: 'TOTAL',
                                   value: CurrencyFormatter.format(_sale!.total, currency),
-                                  bold: true,
-                                  large: true,
+                                  bold: true, large: true,
                                 ),
                                 const SizedBox(height: 8),
                                 Center(
                                   child: Chip(
                                     avatar: Icon(
                                       _sale!.paymentMethod == PaymentMethod.cash
-                                          ? Icons.payments_outlined
-                                          : Icons.credit_card,
+                                          ? Icons.payments_outlined : Icons.credit_card,
                                       size: 16,
                                     ),
                                     label: Text(
                                       _sale!.paymentMethod == PaymentMethod.cash
-                                          ? 'Efectivo'
-                                          : 'Transferencia',
+                                          ? 'Efectivo' : 'Transferencia',
                                     ),
                                   ),
                                 ),
@@ -581,18 +555,13 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: (_isLoading || _sale == null || _isPrinting)
-                            ? null
-                            : _handlePrint,
+                        onPressed: (_isLoading || _sale == null || _isPrinting) ? null : _handlePrint,
                         icon: _isPrinting
-                            ? const SizedBox(
-                                width: 16, height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
+                            ? const SizedBox(width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.print_outlined),
                         label: Text(_isPrinting ? 'Imprimiendo...' : 'Imprimir'),
-                        style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48)),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -601,8 +570,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
                         onPressed: () => Navigator.pop(context),
                         icon: const Icon(Icons.check),
                         label: const Text('Listo'),
-                        style: FilledButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48)),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                       ),
                     ),
                   ],
@@ -616,10 +584,6 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _ReceiptRow
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _ReceiptRow extends StatelessWidget {
   final String label;
   final String value;
@@ -628,11 +592,8 @@ class _ReceiptRow extends StatelessWidget {
   final Color? valueColor;
 
   const _ReceiptRow({
-    required this.label,
-    required this.value,
-    this.bold = false,
-    this.large = false,
-    this.valueColor,
+    required this.label, required this.value,
+    this.bold = false, this.large = false, this.valueColor,
   });
 
   @override
@@ -640,12 +601,9 @@ class _ReceiptRow extends StatelessWidget {
     final theme = Theme.of(context);
     final style = large
         ? theme.textTheme.titleLarge?.copyWith(
-            fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-            color: valueColor)
+            fontWeight: bold ? FontWeight.bold : FontWeight.normal, color: valueColor)
         : theme.textTheme.bodyLarge?.copyWith(
-            fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-            color: valueColor);
-
+            fontWeight: bold ? FontWeight.bold : FontWeight.normal, color: valueColor);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -682,9 +640,7 @@ class _CartBottomSheet extends ConsumerWidget {
     final cs    = theme.colorScheme;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
+      initialChildSize: 0.6, minChildSize: 0.4, maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
         return Column(
@@ -694,8 +650,7 @@ class _CartBottomSheet extends ConsumerWidget {
                 margin: const EdgeInsets.only(top: 12, bottom: 8),
                 width: 40, height: 4,
                 decoration: BoxDecoration(
-                    color: cs.outlineVariant,
-                    borderRadius: BorderRadius.circular(2)),
+                    color: cs.outlineVariant, borderRadius: BorderRadius.circular(2)),
               ),
             ),
             Padding(
@@ -705,8 +660,7 @@ class _CartBottomSheet extends ConsumerWidget {
                   Icon(Icons.shopping_cart, color: cs.primary),
                   const SizedBox(width: 10),
                   Text('Carrito de venta',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700)),
+                      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
                   const Spacer(),
                   if (cart.isNotEmpty)
                     TextButton.icon(
@@ -725,12 +679,10 @@ class _CartBottomSheet extends ConsumerWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.shopping_cart_outlined,
-                              size: 56, color: cs.outlineVariant),
+                          Icon(Icons.shopping_cart_outlined, size: 56, color: cs.outlineVariant),
                           const SizedBox(height: 12),
                           Text('El carrito está vacío.',
-                              style: theme.textTheme.bodyLarge
-                                  ?.copyWith(color: cs.onSurfaceVariant)),
+                              style: theme.textTheme.bodyLarge?.copyWith(color: cs.onSurfaceVariant)),
                         ],
                       ),
                     )
@@ -749,8 +701,7 @@ class _CartBottomSheet extends ConsumerWidget {
                               .updateQuantity(item.productId, item.quantity - 1),
                           onIncrement: () => ref.read(cartProvider.notifier)
                               .updateQuantity(item.productId, item.quantity + 1),
-                          onRemove: () => ref.read(cartProvider.notifier)
-                              .removeItem(item.productId),
+                          onRemove: () => ref.read(cartProvider.notifier).removeItem(item.productId),
                         );
                       },
                     ),
@@ -761,8 +712,7 @@ class _CartBottomSheet extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
                   decoration: BoxDecoration(
                     color: cs.surface,
-                    border: Border(
-                        top: BorderSide(color: cs.outlineVariant, width: 0.5)),
+                    border: Border(top: BorderSide(color: cs.outlineVariant, width: 0.5)),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -773,11 +723,9 @@ class _CartBottomSheet extends ConsumerWidget {
                           children: [
                             Text('Subtotal:', style: theme.textTheme.bodyMedium
                                 ?.copyWith(color: cs.onSurfaceVariant)),
-                            Text(
-                              CurrencyFormatter.format(subtotal, currency),
-                              style: theme.textTheme.bodyMedium
-                                  ?.copyWith(color: cs.onSurfaceVariant),
-                            ),
+                            Text(CurrencyFormatter.format(subtotal, currency),
+                                style: theme.textTheme.bodyMedium
+                                    ?.copyWith(color: cs.onSurfaceVariant)),
                           ],
                         ),
                         const SizedBox(height: 4),
@@ -791,35 +739,28 @@ class _CartBottomSheet extends ConsumerWidget {
                           if (discount > 0) ...[
                             Text(
                               '- ${CurrencyFormatter.format(discount, currency)}',
-                              style: TextStyle(
-                                  color: Colors.green.shade700,
-                                  fontWeight: FontWeight.w500),
+                              style: TextStyle(color: Colors.green.shade700, fontWeight: FontWeight.w500),
                             ),
                             const SizedBox(width: 4),
                             TextButton(
                               style: TextButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
-                                  padding: EdgeInsets.zero),
-                              onPressed: () =>
-                                  _showDiscountDialog(context, ref, subtotal),
+                                  visualDensity: VisualDensity.compact, padding: EdgeInsets.zero),
+                              onPressed: () => _showDiscountDialog(context, ref, subtotal),
                               child: const Text('Editar'),
                             ),
                             IconButton(
                               visualDensity: VisualDensity.compact,
                               icon: Icon(Icons.close, size: 16, color: cs.error),
                               tooltip: 'Quitar descuento',
-                              onPressed: () =>
-                                  ref.read(saleDiscountProvider.notifier).set(0),
+                              onPressed: () => ref.read(saleDiscountProvider.notifier).set(0),
                             ),
                           ] else
                             TextButton.icon(
                               style: TextButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
-                                  padding: EdgeInsets.zero),
+                                  visualDensity: VisualDensity.compact, padding: EdgeInsets.zero),
                               icon: const Icon(Icons.add, size: 16),
                               label: const Text('Agregar'),
-                              onPressed: () =>
-                                  _showDiscountDialog(context, ref, subtotal),
+                              onPressed: () => _showDiscountDialog(context, ref, subtotal),
                             ),
                         ],
                       ),
@@ -844,8 +785,7 @@ class _CartBottomSheet extends ConsumerWidget {
                           label: const Text('Finalizar venta'),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600),
+                            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
@@ -891,10 +831,7 @@ class _CartBottomSheet extends ConsumerWidget {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           FilledButton(
             onPressed: () {
               if (!formKey.currentState!.validate()) return;
@@ -910,13 +847,10 @@ class _CartBottomSheet extends ConsumerWidget {
   }
 
   /// FIX BUG-1: lee workerSession y cashSession antes de llamar a process().
-  /// Antes: workerId: null, cashSessionId: null → comisiones y flujo de caja rotos.
-  /// Ahora: pasa los IDs reales desde los providers correspondientes.
+  /// Antes siempre pasaba null → comisiones y flujo de caja completamente rotos.
   void _showPaymentDialog(BuildContext context, WidgetRef ref) {
-    // Leer sesión activa del trabajador/dueño
     final workerSession = ref.read(workerSessionProvider);
-    // Leer sesión de caja abierta (puede ser null si la caja está cerrada)
-    final cashSession = ref.read(openSessionProvider).valueOrNull;
+    final cashSession   = ref.read(openSessionProvider).valueOrNull;
 
     showDialog<void>(
       context: context,
@@ -933,7 +867,7 @@ class _CartBottomSheet extends ConsumerWidget {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.pop(context);
-              ref.read(paymentMethodProvider.notifier).set(sale_models.PaymentMethod.transfer);
+              ref.read(paymentMethodProvider.notifier).set(PaymentMethod.transfer);
               ref.read(saleProcessorProvider.notifier).process(
                 workerId: workerSession?.workerId,
                 cashSessionId: cashSession?.id,
@@ -946,7 +880,7 @@ class _CartBottomSheet extends ConsumerWidget {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.pop(context);
-              ref.read(paymentMethodProvider.notifier).set(sale_models.PaymentMethod.cash);
+              ref.read(paymentMethodProvider.notifier).set(PaymentMethod.cash);
               ref.read(saleProcessorProvider.notifier).process(
                 workerId: workerSession?.workerId,
                 cashSessionId: cashSession?.id,
@@ -959,10 +893,6 @@ class _CartBottomSheet extends ConsumerWidget {
   }
 }
 
-// Alias para acceder al enum PaymentMethod desde sale_models en el widget
-// sin necesidad de importar sale.dart directamente aquí
-import 'package:pos_cuba/data/models/sale.dart' as sale_models;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // _CategoryChips, _ProductGrid, _EmptyProducts, _CartItemTile
 // ─────────────────────────────────────────────────────────────────────────────
@@ -973,9 +903,7 @@ class _CategoryChips extends StatelessWidget {
   final ValueChanged<String?> onSelected;
 
   const _CategoryChips({
-    required this.categoriesAsync,
-    required this.selectedCategoryId,
-    required this.onSelected,
+    required this.categoriesAsync, required this.selectedCategoryId, required this.onSelected,
   });
 
   @override
@@ -1004,8 +932,7 @@ class _CategoryChips extends StatelessWidget {
                     child: FilterChip(
                       label: Text(cat.name),
                       selected: selectedCategoryId == cat.id,
-                      onSelected: (selected) =>
-                          onSelected(selected ? cat.id : null),
+                      onSelected: (selected) => onSelected(selected ? cat.id : null),
                     ),
                   )),
             ],
@@ -1027,10 +954,8 @@ class _ProductGrid extends StatelessWidget {
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        childAspectRatio: 0.72,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
+        crossAxisCount: 2, childAspectRatio: 0.72,
+        crossAxisSpacing: 10, mainAxisSpacing: 10,
       ),
       itemCount: products.length,
       itemBuilder: (context, index) {
@@ -1057,20 +982,17 @@ class _EmptyProducts extends StatelessWidget {
         children: [
           Icon(
             hasFilters ? Icons.search_off : Icons.inventory_2_outlined,
-            size: 64,
-            color: theme.colorScheme.outlineVariant,
+            size: 64, color: theme.colorScheme.outlineVariant,
           ),
           const SizedBox(height: 16),
           Text(
             hasFilters ? 'No se encontraron productos.' : 'No hay productos disponibles.',
-            style: theme.textTheme.titleMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           if (hasFilters) ...[
             const SizedBox(height: 8),
             Text('Intenta con otra búsqueda o categoría.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline)),
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline)),
           ],
         ],
       ),
@@ -1086,11 +1008,8 @@ class _CartItemTile extends StatelessWidget {
   final VoidCallback onRemove;
 
   const _CartItemTile({
-    required this.item,
-    required this.currency,
-    required this.onDecrement,
-    required this.onIncrement,
-    required this.onRemove,
+    required this.item, required this.currency,
+    required this.onDecrement, required this.onIncrement, required this.onRemove,
   });
 
   @override
@@ -1100,8 +1019,7 @@ class _CartItemTile extends StatelessWidget {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       title: Text(item.productName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          maxLines: 1, overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
       subtitle: Text(
         '${CurrencyFormatter.format(item.unitPrice, currency)} c/u → ${CurrencyFormatter.format(item.lineTotal, currency)}',
@@ -1121,8 +1039,7 @@ class _CartItemTile extends StatelessWidget {
             tooltip: item.quantity == 1 ? 'Quitar' : 'Reducir cantidad',
           ),
           Container(
-            width: 28,
-            alignment: Alignment.center,
+            width: 28, alignment: Alignment.center,
             child: Text('${item.quantity}',
                 style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
           ),
