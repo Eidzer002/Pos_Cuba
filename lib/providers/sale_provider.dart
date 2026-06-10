@@ -6,8 +6,8 @@ import '../data/models/sale.dart' as sale_models;
 import '../data/models/sale_result.dart';
 import 'cart_provider.dart';
 
-import '../data/models/worker.dart';
 import '../data/repositories/sale_repository.dart';
+import '../data/repositories/worker_repository.dart';
 import '../services/powersync_service.dart';
 import 'business_provider.dart';
 
@@ -64,6 +64,9 @@ class SaleDiscount extends _$SaleDiscount {
 
 /// Procesamiento de venta (async).
 /// Devuelve [SaleResult] con el id de la venta y alertas de stock bajo.
+///
+/// FIX BUG-1: el Worker se resuelve internamente si se provee [workerId],
+/// eliminando la necesidad de pasar `worker: null` desde la UI.
 @riverpod
 class SaleProcessor extends _$SaleProcessor {
   @override
@@ -72,19 +75,24 @@ class SaleProcessor extends _$SaleProcessor {
   Future<void> process({
     required String? workerId,
     required String? cashSessionId,
-    required Worker? worker,
     String? notes,
   }) async {
     state = const AsyncValue.loading();
     try {
-      final repository = ref.read(saleRepositoryProvider);
-      final cart        = ref.read(cartProvider);
+      final repository   = ref.read(saleRepositoryProvider);
+      final cart         = ref.read(cartProvider);
       final paymentMethod = ref.read(paymentMethodProvider);
-      final discount    = ref.read(saleDiscountProvider);
+      final discount     = ref.read(saleDiscountProvider);
 
       if (cart.isEmpty) {
         throw Exception('El carrito esta vacio');
       }
+
+      // Resuelve el Worker completo (con commissionType/Value) si hay un trabajador activo.
+      // Esto garantiza que la comisión se calcule correctamente en processSale().
+      final worker = workerId != null
+          ? await WorkerRepository(PowerSyncService.db).getWorkerById(workerId)
+          : null;
 
       final result = await repository.processSale(
         workerId: workerId,
@@ -96,7 +104,7 @@ class SaleProcessor extends _$SaleProcessor {
         notes: notes,
       );
 
-      // Limpiar carrito despues de venta exitosa
+      // Limpiar carrito y descuento después de venta exitosa
       ref.read(cartProvider.notifier).clear();
       ref.read(saleDiscountProvider.notifier).set(0);
 
