@@ -1,55 +1,49 @@
 // lib/core/utils/security_utils.dart
 // Utilidades de seguridad: hash de PIN, validación de formato, tokens.
-// FIX BUG-01/SEC-01: el PIN NUNCA se guarda ni compara en texto plano.
+//
+// FIX SEC-1: hashPin ahora requiere un [salt] (businessId) para prevenir
+// ataques de rainbow table sobre PINs cortos (4-6 dígitos numéricos).
+// El salt NO es secreto, pero hace inútiles las tablas precomputadas.
+//
+// ⚠️  BREAKING CHANGE: los hashes existentes sin salt son incompatibles.
+//    Los trabajadores creados antes de este fix deberán restablecer su PIN.
 //
 // Uso:
-//   final hash = SecurityUtils.hashPin(rawPin);   // antes de INSERT
-//   final ok   = SecurityUtils.verifyPin(input, storedHash); // para auth
-//   final fmt  = SecurityUtils.isValidPinFormat(pin); // antes de aceptar pin
+//   final hash = SecurityUtils.hashPin(rawPin, salt: businessId);
+//   final ok   = SecurityUtils.verifyPin(input, storedHash, salt: businessId);
+//   final fmt  = SecurityUtils.isValidPinFormat(pin);
 
 import 'dart:convert';
-
 import 'package:crypto/crypto.dart';
 
 class SecurityUtils {
-  // Clase de utilidades puras — no instanciar.
   SecurityUtils._();
 
   // ── PIN ──────────────────────────────────────────────────────────────────
 
-  /// Hashea un PIN usando SHA-256.
+  /// Hashea un PIN usando SHA-256 con [salt].
   ///
-  /// - Hace trim() para eliminar espacios accidentales.
-  /// - SIEMPRE usar antes de guardar o comparar un PIN.
-  /// - NUNCA loggear el resultado — es un hash pero puede ser reversible
-  ///   con rainbow tables si el PIN es corto.
+  /// El formato interno es SHA-256("salt:pin"), donde [salt] debe ser
+  /// el businessId (único por negocio y disponible en autenticación).
+  ///
+  /// - Hace trim() al PIN para eliminar espacios accidentales.
+  /// - NUNCA loggear [pin] ni el resultado.
   ///
   /// Ejemplo:
-  ///   SecurityUtils.hashPin('1234')
-  ///   → '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4'
-  static String hashPin(String pin) {
-    final bytes = utf8.encode(pin.trim());
+  ///   SecurityUtils.hashPin('1234', salt: 'biz-uuid')
+  static String hashPin(String pin, {required String salt}) {
+    final bytes = utf8.encode('$salt:${pin.trim()}');
     return sha256.convert(bytes).toString();
   }
 
-  /// Verifica [inputPin] (texto plano) contra [storedHash] (SHA-256).
+  /// Verifica [inputPin] (texto plano) contra [storedHash] (SHA-256 con salt).
   ///
-  /// Retorna `true` si coinciden, `false` en caso contrario.
-  /// NUNCA comparar texto plano directamente — usar siempre este método.
-  static bool verifyPin(String inputPin, String storedHash) {
-    return hashPin(inputPin) == storedHash;
+  /// Retorna true si coinciden, false en caso contrario.
+  static bool verifyPin(String inputPin, String storedHash, {required String salt}) {
+    return hashPin(inputPin, salt: salt) == storedHash;
   }
 
   /// Valida que [pin] tenga entre 4 y 6 dígitos numéricos.
-  ///
-  /// Retorna `true` si el formato es válido.
-  /// Llamar antes de aceptar un PIN en cualquier formulario.
-  ///
-  /// Ejemplos:
-  ///   isValidPinFormat('1234')   → true
-  ///   isValidPinFormat('123')    → false  (muy corto)
-  ///   isValidPinFormat('1234567') → false (muy largo)
-  ///   isValidPinFormat('12ab')   → false  (no numérico)
   static bool isValidPinFormat(String pin) {
     return RegExp(r'^\d{4,6}$').hasMatch(pin);
   }
@@ -57,9 +51,6 @@ class SecurityUtils {
   // ── Tokens ────────────────────────────────────────────────────────────────
 
   /// Hashea un token de licencia u otro valor sensible con SHA-256.
-  ///
-  /// Nota: los tokens se almacenan en flutter_secure_storage (SEC-02),
-  /// no en SharedPreferences ni en la BD local.
   static String hashToken(String token) {
     final bytes = utf8.encode(token);
     return sha256.convert(bytes).toString();
