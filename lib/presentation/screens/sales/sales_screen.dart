@@ -1,6 +1,11 @@
 // lib/presentation/screens/sales/sales_screen.dart
 // Pantalla de ventas — grilla de productos, búsqueda, carrito y recibo.
 // Material Design 3. Textos en español.
+//
+// FIXES aplicados:
+//   BUG-1: _showPaymentDialog lee workerSessionProvider + openSessionProvider
+//   BUG-4: ref.invalidateSelf() después de cerrar el recibo
+//   ARCH-1: _ReceiptSheetState usa SaleRepository en lugar de db directamente
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,15 +18,15 @@ import '../../../data/models/product.dart';
 import '../../../data/models/sale.dart';
 import '../../../data/models/sale_item.dart';
 import '../../../data/models/sale_result.dart';
-import '../../../data/repositories/sale_repository.dart';
 import '../../../providers/business_provider.dart';
 import '../../../providers/cart_provider.dart';
+import '../../../providers/cashbox_provider.dart';
 import '../../../providers/category_provider.dart';
 import '../../../providers/product_provider.dart';
 import '../../../providers/sale_provider.dart';
-import '../../../services/powersync_service.dart';
-import '../../widgets/common/barcode_scanner_sheet.dart';
+import '../../../providers/worker_session_provider.dart';
 import '../../../services/printer_service.dart';
+import '../../widgets/common/barcode_scanner_sheet.dart';
 import '../../widgets/common/product_card.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,7 +128,9 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
     );
   }
 
-  /// Muestra el recibo. Al cerrarlo, muestra alertas de stock bajo si aplica.
+  /// Muestra el recibo. Al cerrarlo:
+  ///   - BUG-4: resetea SaleProcessor para evitar re-disparos
+  ///   - Muestra alertas de stock bajo si aplica
   void _onSaleCompleted(SaleResult result) {
     final businessId = ref.read(selectedBusinessIdProvider);
     if (businessId == null) return;
@@ -138,27 +145,23 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _ReceiptSheet(saleId: result.saleId, businessId: businessId),
     ).then((_) {
-      // Mostrar alerta de stock bajo después de que el usuario cierra el recibo
+      // FIX BUG-4: resetear el procesador para que el ref.listen no
+      // re-dispare este callback con el resultado anterior en futuros builds.
+      ref.invalidate(saleProcessorProvider);
+
       if (!mounted || !result.hasLowStockAlerts) return;
       _showLowStockAlert(result.lowStockProducts);
     });
   }
 
-  /// Dialog de alertas de stock bajo post-venta.
   void _showLowStockAlert(List<LowStockProduct> products) {
     if (products.isEmpty) return;
     final cs = Theme.of(context).colorScheme;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        icon: const Icon(
-          Icons.inventory_2_outlined,
-          color: Colors.orange,
-          size: 36,
-        ),
-        title: Text(
-          products.length == 1 ? 'Stock bajo' : 'Alertas de stock',
-        ),
+        icon: const Icon(Icons.inventory_2_outlined, color: Colors.orange, size: 36),
+        title: Text(products.length == 1 ? 'Stock bajo' : 'Alertas de stock'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -172,51 +175,36 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
             const SizedBox(height: 14),
             ...products.map((p) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    children: [
-                      Icon(
-                        p.isOutOfStock
-                            ? Icons.remove_shopping_cart
-                            : Icons.warning_amber_rounded,
-                        size: 18,
-                        color: p.isOutOfStock ? Colors.red : Colors.orange,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          p.name,
-                          style: const TextStyle(fontWeight: FontWeight.w500),
+                  child: Row(children: [
+                    Icon(
+                      p.isOutOfStock ? Icons.remove_shopping_cart : Icons.warning_amber_rounded,
+                      size: 18,
+                      color: p.isOutOfStock ? Colors.red : Colors.orange,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(p.name,
+                          style: const TextStyle(fontWeight: FontWeight.w500)),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: p.isOutOfStock ? Colors.red.shade50 : Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: p.isOutOfStock ? Colors.red.shade200 : Colors.orange.shade200,
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: p.isOutOfStock
-                              ? Colors.red.shade50
-                              : Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: p.isOutOfStock
-                                ? Colors.red.shade200
-                                : Colors.orange.shade200,
-                          ),
-                        ),
-                        child: Text(
-                          p.isOutOfStock
-                              ? 'Sin stock'
-                              : '${p.stock} / ${p.minStock}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: p.isOutOfStock
-                                ? Colors.red.shade700
-                                : Colors.orange.shade800,
-                          ),
+                      child: Text(
+                        p.isOutOfStock ? 'Sin stock' : '${p.stock} / ${p.minStock}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: p.isOutOfStock ? Colors.red.shade700 : Colors.orange.shade800,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ]),
                 )),
           ],
         ),
@@ -232,7 +220,6 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Escuchar resultado de venta
     ref.listen<AsyncValue<SaleResult?>>(saleProcessorProvider, (_, next) {
       next.whenData((result) {
         if (result != null) _onSaleCompleted(result);
@@ -318,7 +305,7 @@ class _SalesScreenState extends ConsumerState<SalesScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _ReceiptSheet — Recibo de venta con impresión térmica
+// _ReceiptSheet — FIX ARCH-1: usa SaleRepository en lugar de db directamente
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ReceiptSheet extends ConsumerStatefulWidget {
@@ -335,6 +322,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
   Sale? _sale;
   List<SaleItem> _items = [];
   bool _isLoading  = true;
+  String? _loadError;
   bool _isPrinting = false;
 
   @override
@@ -343,29 +331,26 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
     _loadData();
   }
 
+  /// FIX ARCH-1: usa el repositorio en lugar de PowerSyncService.db directamente.
   Future<void> _loadData() async {
-    final db = PowerSyncService.db;
-    final saleRows = await db.execute(
-      'SELECT * FROM sales WHERE id = ? AND business_id = ?',
-      [widget.saleId, widget.businessId],
-    );
-    if (!mounted || saleRows.isEmpty) {
-      if (mounted) setState(() => _isLoading = false);
-      return;
+    try {
+      final repository = ref.read(saleRepositoryProvider);
+      final sale  = await repository.getSale(widget.saleId);
+      final items = await repository.getSaleItems(widget.saleId);
+      if (!mounted) return;
+      setState(() {
+        _sale      = sale;
+        _items     = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = e.toString();
+        _isLoading = false;
+      });
     }
-    final itemRows = await db.execute(
-      'SELECT * FROM sale_items WHERE sale_id = ? ORDER BY created_at ASC',
-      [widget.saleId],
-    );
-    if (!mounted) return;
-    setState(() {
-      _sale      = Sale.fromRow(saleRows.first);
-      _items     = itemRows.map(SaleItem.fromRow).toList();
-      _isLoading = false;
-    });
   }
-
-  // ── Impresión ──────────────────────────────────────────────────────────
 
   Future<void> _handlePrint() async {
     final service = PrinterService.instance;
@@ -454,8 +439,6 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
     );
   }
 
-  // ── Build ───────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     final currency      = ref.watch(currencySymbolProvider);
@@ -496,93 +479,100 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
-                  : _sale == null
-                      ? const Center(child: Text('No se pudo cargar el recibo.'))
-                      : ListView(
-                          controller: scrollController,
-                          padding: const EdgeInsets.all(20),
-                          children: [
-                            Center(
-                              child: Text(
-                                businessAsync.valueOrNull?.name ?? 'POS Cuba',
-                                style: theme.textTheme.titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            Center(
-                              child: Text(
-                                DateFormatter.formatDateTime(_sale!.createdAt),
-                                style: theme.textTheme.bodySmall
-                                    ?.copyWith(color: cs.outline),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Center(
-                              child: Text(
-                                'Recibo #${_sale!.id.substring(0, 8).toUpperCase()}',
-                                style: theme.textTheme.bodySmall
-                                    ?.copyWith(color: cs.outline),
-                              ),
-                            ),
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Divider(height: 1),
-                            ),
-                            ..._items.map((item) => Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 4),
-                                  child: Row(children: [
-                                    Expanded(
-                                      child: Text(
-                                        '${item.productName} x${item.quantity}',
-                                        style: theme.textTheme.bodyMedium,
-                                      ),
-                                    ),
-                                    Text(
-                                      CurrencyFormatter.format(item.lineTotal, currency),
-                                      style: theme.textTheme.bodyMedium
-                                          ?.copyWith(fontWeight: FontWeight.w500),
-                                    ),
-                                  ]),
-                                )),
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: Divider(height: 1),
-                            ),
-                            if (_sale!.discountAmount > 0) ...[
-                              _ReceiptRow(
-                                  label: 'Subtotal',
-                                  value: CurrencyFormatter.format(
-                                      _sale!.subtotal, currency)),
-                              _ReceiptRow(
-                                  label: 'Descuento',
-                                  value: '- ${CurrencyFormatter.format(_sale!.discountAmount, currency)}',
-                                  valueColor: Colors.green.shade700),
-                            ],
-                            _ReceiptRow(
-                              label: 'TOTAL',
-                              value: CurrencyFormatter.format(_sale!.total, currency),
-                              bold: true,
-                              large: true,
-                            ),
-                            const SizedBox(height: 8),
-                            Center(
-                              child: Chip(
-                                avatar: Icon(
-                                  _sale!.paymentMethod == PaymentMethod.cash
-                                      ? Icons.payments_outlined
-                                      : Icons.credit_card,
-                                  size: 16,
+                  : _loadError != null
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text('Error al cargar recibo: $_loadError',
+                                textAlign: TextAlign.center),
+                          ),
+                        )
+                      : _sale == null
+                          ? const Center(child: Text('No se pudo cargar el recibo.'))
+                          : ListView(
+                              controller: scrollController,
+                              padding: const EdgeInsets.all(20),
+                              children: [
+                                Center(
+                                  child: Text(
+                                    businessAsync.valueOrNull?.name ?? 'POS Cuba',
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
                                 ),
-                                label: Text(
-                                  _sale!.paymentMethod == PaymentMethod.cash
-                                      ? 'Efectivo'
-                                      : 'Transferencia',
+                                Center(
+                                  child: Text(
+                                    DateFormatter.formatDateTime(_sale!.createdAt),
+                                    style: theme.textTheme.bodySmall
+                                        ?.copyWith(color: cs.outline),
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                Center(
+                                  child: Text(
+                                    'Recibo #${_sale!.id.substring(0, 8).toUpperCase()}',
+                                    style: theme.textTheme.bodySmall
+                                        ?.copyWith(color: cs.outline),
+                                  ),
+                                ),
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  child: Divider(height: 1),
+                                ),
+                                ..._items.map((item) => Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 4),
+                                      child: Row(children: [
+                                        Expanded(
+                                          child: Text(
+                                            '${item.productName} x${item.quantity}',
+                                            style: theme.textTheme.bodyMedium,
+                                          ),
+                                        ),
+                                        Text(
+                                          CurrencyFormatter.format(item.lineTotal, currency),
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(fontWeight: FontWeight.w500),
+                                        ),
+                                      ]),
+                                    )),
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 12),
+                                  child: Divider(height: 1),
+                                ),
+                                if (_sale!.discountAmount > 0) ...[
+                                  _ReceiptRow(
+                                      label: 'Subtotal',
+                                      value: CurrencyFormatter.format(_sale!.subtotal, currency)),
+                                  _ReceiptRow(
+                                      label: 'Descuento',
+                                      value: '- ${CurrencyFormatter.format(_sale!.discountAmount, currency)}',
+                                      valueColor: Colors.green.shade700),
+                                ],
+                                _ReceiptRow(
+                                  label: 'TOTAL',
+                                  value: CurrencyFormatter.format(_sale!.total, currency),
+                                  bold: true,
+                                  large: true,
+                                ),
+                                const SizedBox(height: 8),
+                                Center(
+                                  child: Chip(
+                                    avatar: Icon(
+                                      _sale!.paymentMethod == PaymentMethod.cash
+                                          ? Icons.payments_outlined
+                                          : Icons.credit_card,
+                                      size: 16,
+                                    ),
+                                    label: Text(
+                                      _sale!.paymentMethod == PaymentMethod.cash
+                                          ? 'Efectivo'
+                                          : 'Transferencia',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 32),
+                              ],
                             ),
-                            const SizedBox(height: 32),
-                          ],
-                        ),
             ),
             SafeArea(
               child: Padding(
@@ -627,7 +617,7 @@ class _ReceiptSheetState extends ConsumerState<_ReceiptSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _ReceiptRow — fila de totales en el recibo
+// _ReceiptRow
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ReceiptRow extends StatelessWidget {
@@ -663,8 +653,7 @@ class _ReceiptRow extends StatelessWidget {
         children: [
           Text(label,
               style: large
-                  ? theme.textTheme.titleLarge
-                      ?.copyWith(fontWeight: FontWeight.bold)
+                  ? theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)
                   : theme.textTheme.bodyLarge),
           Text(value, style: style),
         ],
@@ -674,7 +663,7 @@ class _ReceiptRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _CartBottomSheet
+// _CartBottomSheet — FIX BUG-1: pasa workerId y cashSessionId reales
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _CartBottomSheet extends ConsumerWidget {
@@ -778,7 +767,6 @@ class _CartBottomSheet extends ConsumerWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Subtotal (solo visible si hay descuento)
                       if (discount > 0) ...[
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -794,7 +782,6 @@ class _CartBottomSheet extends ConsumerWidget {
                         ),
                         const SizedBox(height: 4),
                       ],
-                      // Fila descuento
                       Row(
                         children: [
                           Icon(Icons.discount_outlined, size: 16, color: cs.primary),
@@ -836,11 +823,7 @@ class _CartBottomSheet extends ConsumerWidget {
                             ),
                         ],
                       ),
-                      if (discount > 0)
-                        const Divider(height: 16)
-                      else
-                        const SizedBox(height: 8),
-                      // Total final
+                      if (discount > 0) const Divider(height: 16) else const SizedBox(height: 8),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -876,9 +859,7 @@ class _CartBottomSheet extends ConsumerWidget {
     );
   }
 
-  /// Dialog para ingresar o editar el descuento del carrito.
-  void _showDiscountDialog(
-      BuildContext context, WidgetRef ref, double subtotal) {
+  void _showDiscountDialog(BuildContext context, WidgetRef ref, double subtotal) {
     final current    = ref.read(saleDiscountProvider);
     final controller = TextEditingController(
       text: current > 0 ? current.toStringAsFixed(2) : '',
@@ -893,8 +874,7 @@ class _CartBottomSheet extends ConsumerWidget {
           key: formKey,
           child: TextFormField(
             controller: controller,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             autofocus: true,
             decoration: const InputDecoration(
               labelText: 'Monto del descuento',
@@ -903,8 +883,7 @@ class _CartBottomSheet extends ConsumerWidget {
               hintText: '0.00',
             ),
             validator: (v) {
-              final val =
-                  double.tryParse((v ?? '').replaceAll(',', '.')) ?? -1;
+              final val = double.tryParse((v ?? '').replaceAll(',', '.')) ?? -1;
               if (val < 0) return 'Ingresa un monto válido';
               if (val >= subtotal) return 'El descuento no puede igualar o superar el subtotal';
               return null;
@@ -919,9 +898,7 @@ class _CartBottomSheet extends ConsumerWidget {
           FilledButton(
             onPressed: () {
               if (!formKey.currentState!.validate()) return;
-              final val = double.tryParse(
-                      controller.text.replaceAll(',', '.')) ??
-                  0;
+              final val = double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
               ref.read(saleDiscountProvider.notifier).set(val);
               Navigator.pop(ctx);
             },
@@ -932,7 +909,15 @@ class _CartBottomSheet extends ConsumerWidget {
     );
   }
 
+  /// FIX BUG-1: lee workerSession y cashSession antes de llamar a process().
+  /// Antes: workerId: null, cashSessionId: null → comisiones y flujo de caja rotos.
+  /// Ahora: pasa los IDs reales desde los providers correspondientes.
   void _showPaymentDialog(BuildContext context, WidgetRef ref) {
+    // Leer sesión activa del trabajador/dueño
+    final workerSession = ref.read(workerSessionProvider);
+    // Leer sesión de caja abierta (puede ser null si la caja está cerrada)
+    final cashSession = ref.read(openSessionProvider).valueOrNull;
+
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -948,9 +933,11 @@ class _CartBottomSheet extends ConsumerWidget {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.pop(context);
-              ref.read(paymentMethodProvider.notifier).set(PaymentMethod.transfer);
+              ref.read(paymentMethodProvider.notifier).set(sale_models.PaymentMethod.transfer);
               ref.read(saleProcessorProvider.notifier).process(
-                    workerId: null, cashSessionId: null, worker: null);
+                workerId: workerSession?.workerId,
+                cashSessionId: cashSession?.id,
+              );
             },
           ),
           FilledButton.icon(
@@ -959,9 +946,11 @@ class _CartBottomSheet extends ConsumerWidget {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.pop(context);
-              ref.read(paymentMethodProvider.notifier).set(PaymentMethod.cash);
+              ref.read(paymentMethodProvider.notifier).set(sale_models.PaymentMethod.cash);
               ref.read(saleProcessorProvider.notifier).process(
-                    workerId: null, cashSessionId: null, worker: null);
+                workerId: workerSession?.workerId,
+                cashSessionId: cashSession?.id,
+              );
             },
           ),
         ],
@@ -969,6 +958,10 @@ class _CartBottomSheet extends ConsumerWidget {
     );
   }
 }
+
+// Alias para acceder al enum PaymentMethod desde sale_models en el widget
+// sin necesidad de importar sale.dart directamente aquí
+import 'package:pos_cuba/data/models/sale.dart' as sale_models;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // _CategoryChips, _ProductGrid, _EmptyProducts, _CartItemTile
@@ -1109,8 +1102,7 @@ class _CartItemTile extends StatelessWidget {
       title: Text(item.productName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(fontWeight: FontWeight.w600)),
+          style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
       subtitle: Text(
         '${CurrencyFormatter.format(item.unitPrice, currency)} c/u → ${CurrencyFormatter.format(item.lineTotal, currency)}',
         style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -1132,8 +1124,7 @@ class _CartItemTile extends StatelessWidget {
             width: 28,
             alignment: Alignment.center,
             child: Text('${item.quantity}',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(fontWeight: FontWeight.bold)),
+                style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
           ),
           IconButton(
             visualDensity: VisualDensity.compact,
