@@ -22,6 +22,20 @@ class WorkerRepository {
     }
   }
 
+  /// Obtiene un trabajador por ID. Retorna null si no existe.
+  Future<Worker?> getWorkerById(String workerId) async {
+    try {
+      final row = await db.getOptional(
+        'SELECT * FROM workers WHERE id = ? AND is_active = 1',
+        parameters: [workerId],
+      );
+      return row != null ? Worker.fromRow(row) : null;
+    } catch (e, stack) {
+      debugPrint('WorkerRepository.getWorkerById: $e\n$stack');
+      rethrow;
+    }
+  }
+
   Future<void> createWorker({
     required String businessId,
     required String name,
@@ -31,7 +45,8 @@ class WorkerRepository {
   }) async {
     try {
       final now = DateTime.now().toIso8601String();
-      final pinHash = SecurityUtils.hashPin(rawPin); // Hashea PIN antes de guardar (BUG-01)
+      // FIX SEC-1: hashPin con salt (businessId) para prevenir rainbow tables
+      final pinHash = SecurityUtils.hashPin(rawPin, salt: businessId);
       final id = const Uuid().v4();
 
       await db.execute('''
@@ -56,9 +71,12 @@ class WorkerRepository {
     }
   }
 
+  /// Autentica un trabajador por PIN.
+  /// FIX SEC-1: usa businessId como salt en el hash.
   Future<Worker?> authenticateByPin(String businessId, String rawPin) async {
     try {
-      final pinHash = SecurityUtils.hashPin(rawPin); // Busca por hash, nunca en plano (BUG-01)
+      // Salt = businessId → cada negocio tiene su propio espacio de hashes
+      final pinHash = SecurityUtils.hashPin(rawPin, salt: businessId);
       
       final row = await db.getOptional(
         'SELECT * FROM workers WHERE business_id = ? AND pin_hash = ? AND is_active = 1',
@@ -105,7 +123,8 @@ class WorkerRepository {
   }) async {
     try {
       final now = DateTime.now().toIso8601String();
-      final newPinHash = SecurityUtils.hashPin(newRawPin);
+      // FIX SEC-1: usar businessId como salt
+      final newPinHash = SecurityUtils.hashPin(newRawPin, salt: businessId);
 
       await db.execute(
         'UPDATE workers SET pin_hash = ?, updated_at = ? WHERE id = ? AND business_id = ?',
