@@ -1,5 +1,9 @@
 // lib/presentation/screens/settings/settings_screen.dart
 // Pantalla de configuración general.
+//
+// FIXES aplicados:
+//   ARCH-2: _BusinessInfoSheet y _CommissionDialog reemplazaron `dynamic` con tipos concretos
+//   SEC-1:  SecurityUtils.hashPin() ahora requiere salt — actualizado en _ChangePinDialog
 
 import 'dart:io';
 
@@ -15,10 +19,11 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_routes.dart';
 import '../../../core/constants/app_strings.dart';
 import '../../../core/utils/security_utils.dart';
+import '../../../data/models/business.dart';
 import '../../../data/models/worker.dart';
 import '../../../providers/auth_provider.dart';
-import '../../../providers/theme_provider.dart';
 import '../../../providers/business_provider.dart';
+import '../../../providers/theme_provider.dart';
 import '../../../providers/worker_provider.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,8 +61,7 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.category_outlined),
             title: const Text(AppStrings.categories),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () =>
-                context.push('${AppRoutes.settings}/${AppRoutes.categories}'),
+            onTap: () => context.push('${AppRoutes.settings}/${AppRoutes.categories}'),
           ),
 
           // ── Trabajadores ─────────────────────────────────────────────────
@@ -66,11 +70,9 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.person_add_outlined),
             title: const Text(AppStrings.workers),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () =>
-                context.push('${AppRoutes.settings}/${AppRoutes.workers}'),
+            onTap: () => context.push('${AppRoutes.settings}/${AppRoutes.workers}'),
           ),
 
-          // Lista de trabajadores activos con botón de cambiar PIN
           workersAsync.when(
             data: (workers) => workers.isEmpty
                 ? const SizedBox.shrink()
@@ -81,10 +83,8 @@ class SettingsScreen extends ConsumerWidget {
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
                         child: Text(
                           'Cambiar PIN de trabajador',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context).colorScheme.outline,
-                                  ),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.outline),
                         ),
                       ),
                       ...workers.map((w) => _WorkerPinTile(worker: w)),
@@ -96,7 +96,6 @@ class SettingsScreen extends ConsumerWidget {
 
           // ── Configuración ────────────────────────────────────────────────
           const _SectionHeader(title: 'Configuración'),
-          // Toggle de tema claro/oscuro/sistema
           Consumer(
             builder: (context, ref, _) {
               final themeAsync = ref.watch(appThemeModeProvider);
@@ -113,33 +112,18 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle: Text(
                   mode == ThemeMode.dark
                       ? 'Modo oscuro'
-                      : mode == ThemeMode.light
-                          ? 'Modo claro'
-                          : 'Según el sistema',
+                      : mode == ThemeMode.light ? 'Modo claro' : 'Según el sistema',
                 ),
                 trailing: SegmentedButton<ThemeMode>(
-                  style: SegmentedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                  ),
+                  style: SegmentedButton.styleFrom(visualDensity: VisualDensity.compact),
                   segments: const [
-                    ButtonSegment(
-                      value: ThemeMode.light,
-                      icon: Icon(Icons.light_mode, size: 18),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.system,
-                      icon: Icon(Icons.brightness_auto, size: 18),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.dark,
-                      icon: Icon(Icons.dark_mode, size: 18),
-                    ),
+                    ButtonSegment(value: ThemeMode.light,  icon: Icon(Icons.light_mode,       size: 18)),
+                    ButtonSegment(value: ThemeMode.system, icon: Icon(Icons.brightness_auto,   size: 18)),
+                    ButtonSegment(value: ThemeMode.dark,   icon: Icon(Icons.dark_mode,         size: 18)),
                   ],
                   selected: {mode},
-                  onSelectionChanged: (selection) {
-                    ref.read(appThemeModeProvider.notifier)
-                        .setTheme(selection.first);
-                  },
+                  onSelectionChanged: (s) =>
+                      ref.read(appThemeModeProvider.notifier).setTheme(s.first),
                 ),
               );
             },
@@ -161,8 +145,7 @@ class SettingsScreen extends ConsumerWidget {
             leading: const Icon(Icons.backup_outlined),
             title: const Text(AppStrings.backupRestore),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () =>
-                context.push('${AppRoutes.settings}/${AppRoutes.backup}'),
+            onTap: () => context.push('${AppRoutes.settings}/${AppRoutes.backup}'),
           ),
 
           // ── Cuenta ───────────────────────────────────────────────────────
@@ -173,7 +156,6 @@ class SettingsScreen extends ConsumerWidget {
             textColor: Colors.red,
             onTap: () => _confirmLogout(context, ref),
           ),
-
           const SizedBox(height: 32),
         ],
       ),
@@ -181,15 +163,13 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   void _confirmLogout(BuildContext context, WidgetRef ref) {
-    showDialog(
+    showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text(AppStrings.logout),
         content: const Text('¿Estás seguro de que quieres cerrar sesión?'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text(AppStrings.cancel)),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text(AppStrings.cancel)),
           FilledButton(
             onPressed: () {
               ref.read(authStateProvider.notifier).signOut();
@@ -205,7 +185,7 @@ class SettingsScreen extends ConsumerWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _WorkerPinTile — fila de trabajador con botón de cambiar PIN
+// _WorkerPinTile
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _WorkerPinTile extends ConsumerWidget {
@@ -216,13 +196,13 @@ class _WorkerPinTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor:
-            Theme.of(context).colorScheme.primaryContainer,
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         child: Text(
           worker.name.substring(0, 1).toUpperCase(),
           style: TextStyle(
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
-              fontWeight: FontWeight.bold),
+            color: Theme.of(context).colorScheme.onPrimaryContainer,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
       title: Text(worker.name),
@@ -230,15 +210,13 @@ class _WorkerPinTile extends ConsumerWidget {
         worker.commissionType == CommissionType.percentage
             ? 'Comisión: ${worker.commissionValue.toStringAsFixed(1)}%'
             : 'Salario fijo: ${worker.commissionValue.toStringAsFixed(2)}',
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
+        style: Theme.of(context).textTheme.bodySmall
             ?.copyWith(color: Theme.of(context).colorScheme.outline),
       ),
       trailing: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert),
         onSelected: (value) {
-          if (value == 'pin') _showChangePinDialog(context, ref);
+          if (value == 'pin')        _showChangePinDialog(context, ref);
           if (value == 'commission') _showCommissionDialog(context, ref);
         },
         itemBuilder: (_) => const [
@@ -254,22 +232,16 @@ class _WorkerPinTile extends ConsumerWidget {
   }
 
   void _showChangePinDialog(BuildContext context, WidgetRef ref) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => _ChangePinDialog(worker: worker),
-    );
+    showDialog<void>(context: context, builder: (_) => _ChangePinDialog(worker: worker));
   }
 
   void _showCommissionDialog(BuildContext context, WidgetRef ref) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => _CommissionDialog(worker: worker),
-    );
+    showDialog<void>(context: context, builder: (_) => _CommissionDialog(worker: worker));
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _ChangePinDialog — diálogo completo para cambiar PIN
+// _ChangePinDialog
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ChangePinDialog extends ConsumerStatefulWidget {
@@ -281,13 +253,13 @@ class _ChangePinDialog extends ConsumerStatefulWidget {
 }
 
 class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
-  final _newPinCtrl = TextEditingController();
+  final _newPinCtrl     = TextEditingController();
   final _confirmPinCtrl = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
+  final _formKey        = GlobalKey<FormState>();
 
-  bool _obscureNew = true;
+  bool _obscureNew     = true;
   bool _obscureConfirm = true;
-  bool _isSaving = false;
+  bool _isSaving       = false;
   String? _errorMessage;
 
   @override
@@ -303,8 +275,8 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
     final business = ref.read(currentBusinessProvider).valueOrNull;
     if (business == null) return;
 
-    // Validar que el nuevo PIN sea diferente al actual
-    final newHash = SecurityUtils.hashPin(_newPinCtrl.text);
+    // FIX SEC-1: hashPin ahora requiere salt — usar businessId como salt
+    final newHash = SecurityUtils.hashPin(_newPinCtrl.text, salt: business.id);
     if (newHash == widget.worker.pinHash) {
       setState(() => _errorMessage = 'El nuevo PIN debe ser diferente al actual.');
       return;
@@ -314,9 +286,9 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
 
     try {
       await ref.read(workerOperationsProvider.notifier).changePin(
-            workerId: widget.worker.id,
+            workerId:   widget.worker.id,
             businessId: business.id,
-            newPin: _newPinCtrl.text,
+            newPin:     _newPinCtrl.text,
           );
 
       if (mounted) {
@@ -329,10 +301,7 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _isSaving = false;
-          _errorMessage = 'Error al cambiar PIN: $e';
-        });
+        setState(() { _isSaving = false; _errorMessage = 'Error al cambiar PIN: $e'; });
       }
     }
   }
@@ -346,7 +315,6 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Nuevo PIN
             TextFormField(
               controller: _newPinCtrl,
               obscureText: _obscureNew,
@@ -360,23 +328,17 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
-                  icon: Icon(
-                      _obscureNew ? Icons.visibility : Icons.visibility_off),
-                  onPressed: () =>
-                      setState(() => _obscureNew = !_obscureNew),
+                  icon: Icon(_obscureNew ? Icons.visibility : Icons.visibility_off),
+                  onPressed: () => setState(() => _obscureNew = !_obscureNew),
                 ),
               ),
               validator: (v) {
                 if (v == null || v.isEmpty) return 'Requerido';
-                if (!SecurityUtils.isValidPinFormat(v)) {
-                  return 'El PIN debe tener entre 4 y 6 dígitos';
-                }
+                if (!SecurityUtils.isValidPinFormat(v)) return 'El PIN debe tener entre 4 y 6 dígitos';
                 return null;
               },
             ),
             const SizedBox(height: 16),
-
-            // Confirmar PIN
             TextFormField(
               controller: _confirmPinCtrl,
               obscureText: _obscureConfirm,
@@ -390,11 +352,8 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
-                  icon: Icon(_obscureConfirm
-                      ? Icons.visibility
-                      : Icons.visibility_off),
-                  onPressed: () =>
-                      setState(() => _obscureConfirm = !_obscureConfirm),
+                  icon: Icon(_obscureConfirm ? Icons.visibility : Icons.visibility_off),
+                  onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
                 ),
               ),
               validator: (v) {
@@ -403,16 +362,10 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
                 return null;
               },
             ),
-
-            // Mensaje de error
             if (_errorMessage != null) ...[
               const SizedBox(height: 12),
-              Text(
-                _errorMessage!,
-                style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                    fontSize: 13),
-              ),
+              Text(_errorMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 13)),
             ],
           ],
         ),
@@ -425,11 +378,8 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
         FilledButton(
           onPressed: _isSaving ? null : _save,
           child: _isSaving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white))
+              ? const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Text('Guardar PIN'),
         ),
       ],
@@ -438,7 +388,7 @@ class _ChangePinDialogState extends ConsumerState<_ChangePinDialog> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _showCurrencyDialog — #18
+// _showCurrencyDialog
 // ─────────────────────────────────────────────────────────────────────────────
 
 Future<void> _showCurrencyDialog(BuildContext context, WidgetRef ref) async {
@@ -446,8 +396,8 @@ Future<void> _showCurrencyDialog(BuildContext context, WidgetRef ref) async {
   if (business == null) return;
 
   const presets = ['CUP', 'USD', 'EUR', 'MLC'];
-  String selected = business.currencySymbol;
-  final customCtrl = TextEditingController(
+  String selected    = business.currencySymbol;
+  final customCtrl   = TextEditingController(
       text: presets.contains(selected) ? '' : selected);
 
   await showDialog<void>(
@@ -464,22 +414,20 @@ Future<void> _showCurrencyDialog(BuildContext context, WidgetRef ref) async {
               children: presets.map((p) => ChoiceChip(
                 label: Text(p),
                 selected: selected == p,
-                onSelected: (_) => setState(() {
-                  selected = p;
-                  customCtrl.clear();
-                }),
+                onSelected: (_) => setState(() { selected = p; customCtrl.clear(); }),
               )).toList(),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: customCtrl,
               decoration: const InputDecoration(
-                labelText: 'Personalizado (ej. \$ , €, Bs)',
+                labelText: r'Personalizado (ej. $, €, Bs)',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.edit_outlined),
               ),
               maxLength: 5,
-              onChanged: (v) => setState(() => selected = v.trim().isEmpty ? presets[0] : v.trim()),
+              onChanged: (v) => setState(
+                  () => selected = v.trim().isEmpty ? presets[0] : v.trim()),
             ),
           ],
         ),
@@ -508,10 +456,12 @@ Future<void> _showCurrencyDialog(BuildContext context, WidgetRef ref) async {
   );
 }
 
-// _showBusinessInfoSheet — #17
+// ─────────────────────────────────────────────────────────────────────────────
+// _showBusinessInfoSheet
+// FIX ARCH-2: business ahora tipado como Business (antes era dynamic)
 // ─────────────────────────────────────────────────────────────────────────────
 
-void _showBusinessInfoSheet(BuildContext context, WidgetRef ref, business) {
+void _showBusinessInfoSheet(BuildContext context, WidgetRef ref, Business business) {
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -523,7 +473,8 @@ void _showBusinessInfoSheet(BuildContext context, WidgetRef ref, business) {
 }
 
 class _BusinessInfoSheet extends ConsumerStatefulWidget {
-  final dynamic business;
+  // FIX ARCH-2: tipado como Business en lugar de dynamic
+  final Business business;
   const _BusinessInfoSheet({required this.business});
 
   @override
@@ -540,10 +491,10 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
   @override
   void initState() {
     super.initState();
-    _nameCtrl    = TextEditingController(text: widget.business.name as String);
-    _addressCtrl = TextEditingController(text: widget.business.address as String? ?? '');
-    _phoneCtrl   = TextEditingController(text: widget.business.phone as String? ?? '');
-    _logoPath    = widget.business.logoPath as String?;
+    _nameCtrl    = TextEditingController(text: widget.business.name);
+    _addressCtrl = TextEditingController(text: widget.business.address ?? '');
+    _phoneCtrl   = TextEditingController(text: widget.business.phone   ?? '');
+    _logoPath    = widget.business.logoPath;
   }
 
   @override
@@ -557,7 +508,7 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
         source: ImageSource.gallery, maxWidth: 512, maxHeight: 512, imageQuality: 90);
     if (picked == null) return;
     final docsDir = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docsDir.path}/business');
+    final dir     = Directory('${docsDir.path}/business');
     if (!await dir.exists()) await dir.create(recursive: true);
     final dest = '${dir.path}/${const Uuid().v4()}${pathlib.extension(picked.path)}';
     await File(picked.path).copy(dest);
@@ -570,9 +521,9 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
     try {
       final repo = ref.read(businessRepositoryProvider);
       await repo.updateBusiness(widget.business.copyWith(
-        name: _nameCtrl.text.trim(),
-        address: _addressCtrl.text.trim().isEmpty ? null : _addressCtrl.text.trim(),
-        phone: _phoneCtrl.text.trim().isEmpty ? null : _phoneCtrl.text.trim(),
+        name:     _nameCtrl.text.trim(),
+        address:  _addressCtrl.text.trim().isEmpty ? null : _addressCtrl.text.trim(),
+        phone:    _phoneCtrl.text.trim().isEmpty   ? null : _phoneCtrl.text.trim(),
         logoPath: _logoPath,
       ));
       if (mounted) Navigator.pop(context);
@@ -598,8 +549,6 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
               style: Theme.of(context).textTheme.titleLarge
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 20),
-
-          // Logo
           GestureDetector(
             onTap: _pickLogo,
             child: Stack(alignment: Alignment.bottomRight, children: [
@@ -617,7 +566,6 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
             ]),
           ),
           const SizedBox(height: 20),
-
           TextFormField(controller: _nameCtrl,
               decoration: const InputDecoration(labelText: 'Nombre del negocio *',
                   prefixIcon: Icon(Icons.store_outlined), border: OutlineInputBorder())),
@@ -631,7 +579,6 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
               decoration: const InputDecoration(labelText: 'Teléfono (opcional)',
                   prefixIcon: Icon(Icons.phone_outlined), border: OutlineInputBorder())),
           const SizedBox(height: 20),
-
           SizedBox(width: double.infinity,
             child: FilledButton.icon(
               onPressed: _isSaving ? null : _save,
@@ -649,11 +596,14 @@ class _BusinessInfoSheetState extends ConsumerState<_BusinessInfoSheet> {
   }
 }
 
-// _CommissionDialog — #16
+// ─────────────────────────────────────────────────────────────────────────────
+// _CommissionDialog
+// FIX ARCH-2: worker ahora tipado como Worker (antes era dynamic)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _CommissionDialog extends ConsumerStatefulWidget {
-  final dynamic worker;
+  // FIX ARCH-2: tipado como Worker en lugar de dynamic
+  final Worker worker;
   const _CommissionDialog({required this.worker});
 
   @override
@@ -668,25 +618,25 @@ class _CommissionDialogState extends ConsumerState<_CommissionDialog> {
   @override
   void initState() {
     super.initState();
-    _type = widget.worker.commissionType as CommissionType;
+    _type      = widget.worker.commissionType;
     _valueCtrl = TextEditingController(
-        text: (widget.worker.commissionValue as double).toStringAsFixed(2));
+        text: widget.worker.commissionValue.toStringAsFixed(2));
   }
 
   @override
   void dispose() { _valueCtrl.dispose(); super.dispose(); }
 
   Future<void> _save() async {
-    final value = double.tryParse(_valueCtrl.text.replaceAll(',', '.')) ?? 0;
+    final value    = double.tryParse(_valueCtrl.text.replaceAll(',', '.')) ?? 0;
     if (value < 0) return;
     final business = ref.read(currentBusinessProvider).valueOrNull;
     if (business == null) return;
     setState(() => _isSaving = true);
     try {
       await ref.read(workerOperationsProvider.notifier).updateCommission(
-        workerId: widget.worker.id as String,
-        businessId: business.id,
-        commissionType: _type,
+        workerId:        widget.worker.id,
+        businessId:      business.id,
+        commissionType:  _type,
         commissionValue: value,
       );
       if (mounted) {
@@ -713,7 +663,7 @@ class _CommissionDialogState extends ConsumerState<_CommissionDialog> {
           SegmentedButton<CommissionType>(
             segments: const [
               ButtonSegment(value: CommissionType.percentage,
-                  icon: Icon(Icons.percent), label: Text('Porcentaje')),
+                  icon: Icon(Icons.percent),      label: Text('Porcentaje')),
               ButtonSegment(value: CommissionType.fixed,
                   icon: Icon(Icons.attach_money), label: Text('Fijo')),
             ],
@@ -748,6 +698,7 @@ class _CommissionDialogState extends ConsumerState<_CommissionDialog> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // _SectionHeader
 // ─────────────────────────────────────────────────────────────────────────────
 
