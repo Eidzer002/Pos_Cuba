@@ -1,28 +1,45 @@
 // lib/presentation/screens/cashbox/cashbox_screen.dart
 // Pantalla de caja con apertura/cierre y movimientos.
+//
+// FIXES aplicados:
+//   BUG-2:  _OpenCashboxView → ConsumerStatefulWidget con dispose() del controller
+//   ARCH-6: ref.listen en CashboxScreen para mostrar errores de operaciones
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../core/constants/app_strings.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../data/models/cash_movement.dart';
 import '../../../data/models/cash_session.dart';
 import '../../../providers/business_provider.dart';
 import '../../../providers/cashbox_provider.dart';
+import '../../../providers/worker_session_provider.dart';
 
-/// Pantalla de caja.
 class CashboxScreen extends ConsumerWidget {
   const CashboxScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final currency = ref.watch(currencySymbolProvider);
+    final currency     = ref.watch(currencySymbolProvider);
     final sessionAsync = ref.watch(openSessionProvider);
 
+    // FIX ARCH-6: mostrar SnackBar cuando una operación de caja falla.
+    // Antes: open/addIncome/addExpense fallaban silenciosamente sin feedback al usuario.
+    ref.listen<AsyncValue<void>>(cashboxOperationsProvider, (_, next) {
+      if (next.hasError) {
+        final msg = next.error.toString();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error en caja: $msg'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ));
+      }
+    });
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(AppStrings.cashbox),
-      ),
+      appBar: AppBar(title: const Text(AppStrings.cashbox)),
       body: sessionAsync.when(
         data: (session) => session == null
             ? _OpenCashboxView(currency: currency)
@@ -34,27 +51,39 @@ class CashboxScreen extends ConsumerWidget {
   }
 }
 
-/// Vista para abrir caja.
-class _OpenCashboxView extends ConsumerWidget {
-  final String currency;
+// ─────────────────────────────────────────────────────────────────────────────
+// _OpenCashboxView
+// FIX BUG-2: convertido a ConsumerStatefulWidget para poder llamar dispose()
+// sobre el TextEditingController. Antes era ConsumerWidget y el controller se
+// creaba en build() sin nunca ser dispuesto → memory leak garantizado.
+// ─────────────────────────────────────────────────────────────────────────────
 
+class _OpenCashboxView extends ConsumerStatefulWidget {
+  final String currency;
   const _OpenCashboxView({required this.currency});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final controller = TextEditingController();
+  ConsumerState<_OpenCashboxView> createState() => _OpenCashboxViewState();
+}
 
+class _OpenCashboxViewState extends ConsumerState<_OpenCashboxView> {
+  late final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(
-            Icons.storefront,
-            size: 64,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          Icon(Icons.storefront, size: 64, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 24),
           Text(
             AppStrings.cashboxClosed,
@@ -64,29 +93,34 @@ class _OpenCashboxView extends ConsumerWidget {
           const SizedBox(height: 8),
           Text(
             'Debes abrir la caja para procesar ventas en efectivo',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey,
-                ),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 32),
           TextField(
-            controller: controller,
+            controller: _controller,
             keyboardType: TextInputType.number,
             decoration: InputDecoration(
               labelText: AppStrings.openingAmount,
-              prefixText: currency,
+              prefixText: widget.currency,
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 24),
-          ElevatedButton(
+          FilledButton.icon(
             onPressed: () {
-              final amount = double.tryParse(controller.text) ?? 0;
-              if (amount >= 0) {
-                ref.read(cashboxOperationsProvider.notifier).open(amount);
-              }
+              final amount = double.tryParse(_controller.text) ?? 0;
+              if (amount < 0) return;
+              // Pasar workerId del trabajador/dueño activo a la sesión de caja
+              final workerSession = ref.read(workerSessionProvider);
+              ref.read(cashboxOperationsProvider.notifier).open(
+                amount,
+                workerId: workerSession?.workerId,
+              );
             },
-            child: const Text(AppStrings.openCashbox),
+            icon: const Icon(Icons.lock_open_outlined),
+            label: const Text(AppStrings.openCashbox),
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           ),
         ],
       ),
@@ -94,7 +128,10 @@ class _OpenCashboxView extends ConsumerWidget {
   }
 }
 
-/// Vista de caja abierta.
+// ─────────────────────────────────────────────────────────────────────────────
+// _CashboxOpenView
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _CashboxOpenView extends ConsumerWidget {
   final CashSession session;
   final String currency;
@@ -107,7 +144,6 @@ class _CashboxOpenView extends ConsumerWidget {
 
     return Column(
       children: [
-        // Header de caja abierta
         Container(
           padding: const EdgeInsets.all(16),
           color: Colors.green.shade50,
@@ -122,9 +158,7 @@ class _CashboxOpenView extends ConsumerWidget {
                     Text(
                       AppStrings.cashboxOpen,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Colors.green.shade700,
-                            fontWeight: FontWeight.bold,
-                          ),
+                            color: Colors.green.shade700, fontWeight: FontWeight.bold),
                     ),
                     Text(
                       'Apertura: ${CurrencyFormatter.format(session.openingAmount, currency)}',
@@ -140,7 +174,6 @@ class _CashboxOpenView extends ConsumerWidget {
             ],
           ),
         ),
-        // Botones de movimiento
         Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -158,18 +191,15 @@ class _CashboxOpenView extends ConsumerWidget {
                   onPressed: () => _showMovementDialog(context, ref, false),
                   icon: const Icon(Icons.remove),
                   label: const Text('Salida'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red,
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                 ),
               ),
             ],
           ),
         ),
-        // Lista de movimientos
         Expanded(
           child: movementsAsync.when(
-            data: (movements) => _buildMovementsList(movements, currency),
+            data: (movements) => _buildMovementsList(context, movements),
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('Error: $e')),
           ),
@@ -178,13 +208,10 @@ class _CashboxOpenView extends ConsumerWidget {
     );
   }
 
-  Widget _buildMovementsList(List<CashMovement> movements, String currency) {
+  Widget _buildMovementsList(BuildContext context, List<CashMovement> movements) {
     if (movements.isEmpty) {
-      return const Center(
-        child: Text('No hay movimientos registrados'),
-      );
+      return const Center(child: Text('No hay movimientos registrados'));
     }
-
     return ListView.builder(
       itemCount: movements.length,
       itemBuilder: (context, index) {
@@ -208,58 +235,43 @@ class _CashboxOpenView extends ConsumerWidget {
   }
 
   void _showMovementDialog(BuildContext context, WidgetRef ref, bool isIncome) {
-    final amountController = TextEditingController();
-    final descController = TextEditingController();
+    final amountCtrl = TextEditingController();
+    final descCtrl   = TextEditingController();
 
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: Text(isIncome ? 'Nueva Entrada' : 'Nueva Salida'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: amountController,
+              controller: amountCtrl,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                labelText: 'Monto',
-                prefixText: currency,
-              ),
+                labelText: 'Monto', prefixText: currency, border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 16),
             TextField(
-              controller: descController,
+              controller: descCtrl,
               decoration: const InputDecoration(
-                labelText: 'Descripcion',
-              ),
+                labelText: 'Descripción', border: OutlineInputBorder()),
             ),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(AppStrings.cancel),
-          ),
-          ElevatedButton(
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text(AppStrings.cancel)),
+          FilledButton(
             onPressed: () {
-              final amount = double.tryParse(amountController.text) ?? 0;
-              final desc = descController.text;
-              if (amount > 0 && desc.isNotEmpty) {
-                if (isIncome) {
-                  ref.read(cashboxOperationsProvider.notifier).addIncome(
-                        session.id,
-                        amount,
-                        desc,
-                      );
-                } else {
-                  ref.read(cashboxOperationsProvider.notifier).addExpense(
-                        session.id,
-                        amount,
-                        desc,
-                      );
-                }
-                Navigator.pop(context);
+              final amount = double.tryParse(amountCtrl.text) ?? 0;
+              final desc   = descCtrl.text.trim();
+              if (amount <= 0 || desc.isEmpty) return;
+              if (isIncome) {
+                ref.read(cashboxOperationsProvider.notifier).addIncome(session.id, amount, desc);
+              } else {
+                ref.read(cashboxOperationsProvider.notifier).addExpense(session.id, amount, desc);
               }
+              Navigator.pop(ctx);
             },
             child: const Text(AppStrings.confirm),
           ),
@@ -271,9 +283,9 @@ class _CashboxOpenView extends ConsumerWidget {
   void _showCloseDialog(BuildContext context, WidgetRef ref) {
     final controller = TextEditingController();
 
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text(AppStrings.closeCashbox),
         content: TextField(
           controller: controller,
@@ -281,18 +293,16 @@ class _CashboxOpenView extends ConsumerWidget {
           decoration: InputDecoration(
             labelText: AppStrings.closingAmount,
             prefixText: currency,
+            border: const OutlineInputBorder(),
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(AppStrings.cancel),
-          ),
-          ElevatedButton(
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text(AppStrings.cancel)),
+          FilledButton(
             onPressed: () {
               final amount = double.tryParse(controller.text) ?? 0;
               ref.read(cashboxOperationsProvider.notifier).close(amount);
-              Navigator.pop(context);
+              Navigator.pop(ctx);
             },
             child: const Text(AppStrings.closeCashbox),
           ),
